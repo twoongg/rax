@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,40 @@ def _depth_png_data(value: Any) -> tuple[str, dict[str, Any]]:
         "max_meters": float(valid_values.max()) if valid_values.size else None,
     }
     return base64.b64encode(stream.getvalue()).decode("ascii"), stats
+
+
+_image_encoder: ThreadPoolExecutor | None = None
+_image_encoder_lock = threading.Lock()
+
+
+def _encode_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """PNG-encode every RGB and depth image of these observations at once.
+
+    Pillow and zlib release the GIL while compressing, so the images of a whole
+    action chunk encode in parallel. The PNG bytes are the same as serial encoding.
+    Returns, per observation, ``{camera: data}`` and ``{depth_key: (data, stats)}``.
+    """
+
+    global _image_encoder
+    jobs = []
+    for index, observation in enumerate(observations):
+        for camera in CAMERAS:
+            if camera in observation:
+                jobs.append((index, camera, _png_data, observation[camera]))
+            depth_key = f"{camera}_depth_m"
+            if depth_key in observation:
+                jobs.append((index, depth_key, _depth_png_data, observation[depth_key]))
+    with _image_encoder_lock:
+        if _image_encoder is None:
+            _image_encoder = ThreadPoolExecutor(
+                max_workers=min(8, os.cpu_count() or 1),
+                thread_name_prefix="robodojo-png",
+            )
+    results = _image_encoder.map(lambda job: job[2](job[3]), jobs)
+    encoded: list[dict[str, Any]] = [{} for _ in observations]
+    for (index, key, _, _), value in zip(jobs, results, strict=True):
+        encoded[index][key] = value
+    return encoded
 
 
 class SimulatorProcess:
@@ -1054,9 +1089,15 @@ class RoboDojoMCP:
         return self.sim
 
     def _observation_packet(
-        self, observation: dict[str, Any], *, transition: Any = None
+        self,
+        observation: dict[str, Any],
+        *,
+        transition: Any = None,
+        encoded: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         observation = observation_for(self).clean(observation)
+        if encoded is None:
+            encoded = _encode_observations([observation])[0]
         images = []
         depth_maps = {}
         attachments = []
@@ -1068,7 +1109,7 @@ class RoboDojoMCP:
             content.append(
                 {
                     "type": "image",
-                    "data": _png_data(observation[camera]),
+                    "data": encoded[camera],
                     "mimeType": "image/png",
                 }
             )
@@ -1080,9 +1121,9 @@ class RoboDojoMCP:
             depth_key = f"{camera}_depth_m"
             if depth_key not in observation:
                 continue
-            encoded, stats = _depth_png_data(observation[depth_key])
+            depth_png, stats = encoded[depth_key]
             content_index = len(content) + 1
-            content.append({"type": "image", "data": encoded, "mimeType": "image/png"})
+            content.append({"type": "image", "data": depth_png, "mimeType": "image/png"})
             depth_maps[camera] = dict(
                 stats, content_index=content_index, raw_field=depth_key
             )
@@ -1193,8 +1234,12 @@ class RoboDojoMCP:
         frame_contents: list[list[dict[str, Any]]] = []
         steps = transition.get("steps") if isinstance(transition, dict) else None
         frequency = float((self.sim.metadata or {}).get("control_frequency_hz", 25.0))
+        observations = [observation_for(self).clean(item) for item in observations]
+        encoded = _encode_observations(observations)
         for frame_index, observation in enumerate(observations):
-            local, local_content = self._observation_packet(observation)
+            local, local_content = self._observation_packet(
+                observation, encoded=encoded[frame_index]
+            )
             step_id = (
                 int(steps[frame_index]["step_id"])
                 if isinstance(steps, list) and frame_index < len(steps)

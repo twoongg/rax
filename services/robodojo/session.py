@@ -193,11 +193,8 @@ class RoboDojoSession:
 
         if self.episode_id is None:
             return
-        observation = (
-            f"{self.episode_id}/observations/{self.step_id:06d}.npz"
-            if hasattr(self, "obs")
-            else None
-        )
+        # Latest RGB frames for the operator's live view (overwritten each step).
+        observation = f"{self.episode_id}/live.npz" if hasattr(self, "obs") else None
         state = {
             "schema": "robodojo_operator_state_v1",
             "simulator_pid": os.getpid(),
@@ -319,12 +316,21 @@ class RoboDojoSession:
         if record:
             directory = self.episode_dir / "observations"
             directory.mkdir(exist_ok=True)
+            # Images are kept in the published frame sequences and sensors.mp4;
+            # compressing full RGB-D here too cost ~0.15 s per step and 1-2 GB per
+            # episode, so only the small fields are recorded.
             recorded = {
                 key: value
                 for key, value in self.obs.items()
                 if key != "camera_parameters"
+                and key not in images
+                and key not in depth_fields
             }
-            np.savez_compressed(directory / f"{self.step_id:06d}.npz", **recorded)
+            np.savez(directory / f"{self.step_id:06d}.npz", **recorded)
+            live = self.episode_dir / "live.npz"
+            with open(live.with_suffix(".tmp"), "wb") as stream:
+                np.savez(stream, **images)
+            live.with_suffix(".tmp").replace(live)
             if camera_parameters:
                 write_json(
                     directory / f"{self.step_id:06d}_camera_parameters.json",
