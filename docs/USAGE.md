@@ -60,6 +60,8 @@ names the reason, for example `--task-rules does not apply to BEHAVIOR sessions:
 | `--agent-cli` | `codex` | `codex`, `claude`, `dsh` or `kimi` |
 | `--agent-provider` | `openrouter` | Provider for the selected harness: OpenRouter, vendor API, vendor account or `custom`; see [Agent harnesses](https://github.com/robot-agent-exploration/rax/blob/main/docs/AGENT_HARNESSES.md). Codex uses its provider profile |
 | `--agent-effort` | `xhigh` | Reasoning effort, `xhigh` or `max`, for the agent and its formal copies |
+| `--external-perception` | `on` | `off` removes the `gemini_generate` tool; see [section 8](#8-gemini) |
+| `--perception-url`, `--perception-model` | none | Serve `gemini_generate` from your own OpenAI-compatible server and model instead of Gemini; see [section 8](#8-gemini) |
 | `--observation-profile` | `rgbd` | `rgbd`, or `rgb-only` (no depth or camera geometry). BEHAVIOR: always `rgbd` |
 | `--demonstration-context` | `terminal_state` | What the agent sees of a demonstration: `terminal_state` (the final frame), `completion_sequence` (ordered frames of the whole demonstration) or `none` |
 | `--task-rules` | `public` | RoboDojo: `public` (the public rubric) or `code-summary` (adds the success stages, thresholds and partial credit summarized from the official task code). BEHAVIOR: always the official BDDL task definition |
@@ -371,6 +373,28 @@ example to check an image. Spending has no session limit; one ledger per session
 exploration, rehearsals, formal episodes and live copies, and the dashboard shows the
 spend. Without an OpenRouter key every call answers `Gemini is not configured`. BEHAVIOR
 episode reviews and code-run reports use a separate $10 operator budget per session.
+
+### An open-weight model instead of Gemini
+
+`--perception-url` and `--perception-model` put a model you serve behind the same tool,
+for a session that uses no closed model, for example the vLLM that already serves the
+agent:
+
+```bash
+runtime/envs/robodojo/bin/python scripts/configure_auto_research.py --task stack_blocks --sim-gpu 0 \
+    --agent-cli claude --agent-provider custom \
+    --perception-url http://127.0.0.1:8000 --perception-model deepseek-v4.1-flash
+```
+
+The MCP service posts the tool's OpenAI-format requests to `<url>/v1/chat/completions`
+directly (no key, no web proxy, up to 300 s per call). The model must accept images; vLLM
+serves images, JSON schema output and tool calls when the model and its parsers support
+them. Its usage is recorded at zero cost. The tool keeps the name `gemini_generate`, and
+the session's tool description and gemini skill name the served model and say what
+differs: the `reasoning` field has no effect, and the model's reasoning counts toward
+`max_tokens`. The setting is part of the session's configuration, so it cannot change on
+resume. Agent-free formal re-runs (`services/controller/batch.py`) still have no
+perception tool.
 
 ## 9. Troubleshooting
 

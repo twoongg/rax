@@ -25,6 +25,9 @@ class Setup:
     demonstration_images: int = 0
     # Live-copy mode: the later copies carry handoff/ (it is in transfer_parts).
     carries_handoff: bool = True
+    # The open-weight model behind gemini_generate when the session serves its own
+    # (Configuration.perception_model); None for Gemini on OpenRouter.
+    perception_model: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, 'options', frozenset(self.options))
@@ -59,6 +62,10 @@ class Setup:
             'handoff': 'handoff' in self.options,
             # The exploring agent's later live copies continue from its handoff/.
             'carries_handoff': 'agent-formal' in self.options and self.carries_handoff,
+            # The model behind gemini_generate: the session's own open-weight model, or Gemini.
+            'perception_model': self.perception_model,
+            'perception_name': (f'{self.perception_model} (an open-weight model)' if self.perception_model
+                                else 'Gemini 3.8 Flash'),
             'demonstrations': self.demonstrations,
             'demonstration_kind': self.demonstration_kind if self.demonstrations else None,
             # One image: text says "image", not "images".

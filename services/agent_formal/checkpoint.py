@@ -106,10 +106,9 @@ def after_exploration(config, deployed, *, gemini_key_file=None, live_copies=Fal
         persist(config.root/'formal.json', summary)
         return summary
     from services.controller.backend import make_backend
-    from services.controller.gemini import GeminiRouter, load_key
+    from services.controller.gemini import router_for
     from services.controller.supervisor import Supervisor
-    key = load_key(gemini_key_file) if config.external_perception else None
-    supervisor = Supervisor(config, lambda: make_backend(config), GeminiRouter(key) if key else None)
+    supervisor = Supervisor(config, lambda: make_backend(config), router_for(config, gemini_key_file))
     try:
         summary = {'status': 'frozen', 'checkpoint': freeze_exploration(config, supervisor, deployed)}
         persist(config.root/'formal.json', summary)

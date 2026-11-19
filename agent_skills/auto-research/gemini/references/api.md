@@ -1,5 +1,14 @@
 # Gemini MCP API
 
+{% if perception_model %}
+**In this session `gemini_generate` is served by `{{ perception_model }}`, an open-weight
+model on the session's own OpenAI-compatible server, not by Gemini or OpenRouter.** The
+request and reply formats below are unchanged, with these differences: the `reasoning`
+field is accepted but has no effect (the model reasons before every answer, and that
+reasoning counts toward `max_tokens`); `reasoning_details` may be absent from replies;
+cost is always 0, so `cost_usd` is 0 and the dollar budget never runs down.
+
+{% endif %}
 ## Request and response
 
 Use `ctx.call("gemini_generate", **request)` inside Python, or the same arguments
@@ -15,11 +24,18 @@ API key or network access is needed.
 | `response_format` | `{"type":"text"}`, `{"type":"json_object"}`, or `json_schema` below. |
 | `tools` | Up to 64 client function declarations; optional `description`, `parameters` JSON Schema and boolean `strict`. Names must be unique, 1–64 letters/digits/underscores/hyphens. |
 | `tool_choice` | `auto`, `none`, `required`, or `{"type":"function","function":{"name":"add"}}`. A named choice must refer to a declared function; `auto`/`required` need nonempty `tools`. |
+{% if perception_model %}
+| `reasoning` | Accepted for compatibility (`effort` **or** `max_tokens`, plus optional booleans `enabled`/`exclude`) but ignored by this server. |
+
+The model `{{ perception_model }}`, endpoint and non-streaming behavior are fixed. No
+model/provider override, plugins, server tools, web
+{% else %}
 | `reasoning` | Optional OpenRouter object: `effort` **or** `max_tokens`, plus optional booleans `enabled`/`exclude`. `effort="low"` is known to work. Other settings depend on provider support. A reasoning token budget must fit within request `max_tokens`. |
 
 The model `google/gemini-3.8-flash`, endpoint, non-streaming behavior
 and `provider.require_parameters=true` are fixed. Unsupported parameters fail instead of
 being silently dropped. No model/provider override, plugins, server tools, web
+{% endif %}
 search, remote files or arbitrary HTTP fields are accepted. `parallel_tool_calls`
 is not available: current endpoints reject it.
 Multiple function calls can still appear in one response; process every call.

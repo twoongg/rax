@@ -42,6 +42,9 @@ def retire_fields(value):
         value.pop(key, None)
     # Existing sessions exposed the external perception tool before this setting existed.
     value.setdefault('external_perception', True)
+    # Sessions saved before a perception server could be named used Gemini on OpenRouter.
+    value.setdefault('perception_url', None)
+    value.setdefault('perception_model', None)
     return value
 
 
@@ -90,6 +93,10 @@ class Configuration:
     agent_cli: str = 'codex'  # 'codex' or 'claude' (harness/claude_cli)
     agent_provider: str = 'openrouter'  # Provider choices depend on the native agent backend.
     external_perception: bool = True  # Optional external Gemini tool; native model vision works without it.
+    # The model behind gemini_generate: None for Gemini on OpenRouter, or an OpenAI-compatible
+    # server's base URL (such as a local vLLM) and the model name it serves.
+    perception_url: str | None = None
+    perception_model: str | None = None
     agent_effort: str = 'xhigh'  # Model reasoning effort for the agent CLI: xhigh or max
     # The session's one evaluation mode. Off (code mode): the agent submits one rehearsed
     # bundle, run alone on the held-out layouts. On (live-copy mode, services/agent_formal):
@@ -144,6 +151,11 @@ class Configuration:
             raise ValueError(f'agent_cli must be one of {NAMES}')
         if type(self.external_perception) is not bool:
             raise ValueError('external_perception must be boolean')
+        from services.controller.gemini import validate_perception
+        validate_perception(self.perception_url, self.perception_model)
+        if self.perception_url and not self.external_perception:
+            raise ValueError('perception_url names the model behind the external perception tool; '
+                             'it needs external_perception on')
         providers = ('openrouter', 'deepseek-api', 'deepseek-account', 'custom') if self.agent_cli == 'dsh' else (
             'openrouter', 'claude-login', 'anthropic', 'custom')
         providers = PROVIDERS.get(self.agent_cli, providers)

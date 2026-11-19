@@ -63,6 +63,10 @@ def arguments():
                         help='Model reasoning effort for the agent CLI')
     parser.add_argument('--external-perception', choices=('on', 'off'), default='on',
                         help='Expose the optional external Gemini perception tool')
+    parser.add_argument('--perception-url',
+                        help='Serve gemini_generate from this OpenAI-compatible server (e.g. a local vLLM, '
+                             'http://127.0.0.1:8000) instead of Gemini on OpenRouter; needs --perception-model')
+    parser.add_argument('--perception-model', help='The model name --perception-url serves (its /v1/models id)')
     parser.add_argument('--sim-gpu', required=True, help='Simulator GPU ordinal or UUID (the agent has no GPU)')
     parser.add_argument('--episodes', type=int, default=5)
     parser.add_argument('--observation-profile', choices=('rgbd', 'rgb-only'), default='rgbd')
@@ -133,6 +137,7 @@ def main():
         task_rules=args.task_rules, agent_cli=args.agent_cli,
         agent_provider=args.agent_provider, agent_effort=args.agent_effort,
         external_perception=args.external_perception == 'on',
+        perception_url=args.perception_url, perception_model=args.perception_model,
         benchmark=args.benchmark)
     validate_layouts(config)
     # Fetch only official visual media before any model/episode starts; the agent works offline. Deployment converts the selected format to local images.
