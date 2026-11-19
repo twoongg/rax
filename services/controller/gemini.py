@@ -1,4 +1,9 @@
-"""Credential-holding OpenRouter router, with no task/perception prompt logic."""
+"""Credential-holding router behind gemini_generate, with no task/perception prompt logic.
+
+By default it calls Gemini on OpenRouter. A session that names its own OpenAI-compatible
+server (perception_url and perception_model, such as a local vLLM serving an open-weight
+vision model) calls that model instead, with the same request and reply shapes.
+"""
 from __future__ import annotations
 
 import base64
@@ -8,12 +13,15 @@ import math
 import os
 import re
 import stat
+import urllib.parse
 import urllib.request
 
 from .billing import MAX_PRICE
 
 MODEL = "google/gemini-3.8-flash"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+CHAT_PATH = "/v1/chat/completions"  # Appended to a session's perception_url.
+GEMINI_LABEL = "Gemini 3.8 Flash"
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 IMAGE_SIGNATURES = {b'\x89PNG\r\n\x1a\n': 'image/png', b'\xff\xd8\xff': 'image/jpeg'}
@@ -181,21 +189,80 @@ def load_key(path=None):
     return key
 
 
+def validate_perception(url, model):
+    """A session's own perception server: both set or neither; a plain http(s) base URL."""
+    if url is None and model is None:
+        return
+    if not isinstance(url, str) or not isinstance(model, str):
+        raise ValueError('perception_url and perception_model must be set together')
+    parts = urllib.parse.urlsplit(url)
+    if (parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password
+            or parts.query or parts.fragment):
+        raise ValueError('perception_url must be an http(s) server URL without credentials, query or fragment')
+    if not model or len(model) > 256 or any(c.isspace() for c in model):
+        raise ValueError('perception_model must be the served model name')
+
+
+def chat_endpoint(url):
+    """The chat-completions endpoint of a server base URL (with or without a trailing /v1)."""
+    base = url.rstrip('/')
+    return base.removesuffix('/v1') + CHAT_PATH
+
+
+def local_label(model):
+    return f'{model} (open-weight, served for this session)'
+
+
+def perception_label(config):
+    """The model name gemini_generate reports in a session (also where no router is held)."""
+    return local_label(config.perception_model) if getattr(config, 'perception_url', None) else GEMINI_LABEL
+
+
+def router_for(config, key_file=None):
+    """The session's gemini_generate backend, or None when the tool is off or has no credential:
+    the session's own server when it names one, else Gemini on OpenRouter with the operator's key."""
+    if not config.external_perception:
+        return None
+    url = getattr(config, 'perception_url', None)
+    if url:
+        return GeminiRouter(endpoint=chat_endpoint(url), model=config.perception_model)
+    key = load_key(key_file)
+    return GeminiRouter(key) if key else None
+
+
 class GeminiRouter:
-    def __init__(self, key: str, *, send=None):
-        if not key:
+    def __init__(self, key: str | None = None, *, send=None, endpoint: str | None = None,
+                 model: str | None = None):
+        # local: a session's own OpenAI-compatible server (no key, no OpenRouter provider
+        # routing, no reported cost); otherwise Gemini on OpenRouter with the operator's key.
+        self.local = endpoint is not None
+        if self.local:
+            validate_perception(endpoint, model)
+        elif not key:
             raise ValueError("OPENROUTER_API_KEY is required")
         self._key = key
+        self.endpoint = endpoint or ENDPOINT
+        self.model = model or MODEL
         self._send = send or self._http
 
+    @property
+    def label(self):
+        """How the tool names its model to the agent."""
+        return local_label(self.model) if self.local else GEMINI_LABEL
+
     def _http(self, payload):
-        request = urllib.request.Request(ENDPOINT, data=json.dumps(payload).encode(), headers={
-            "Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
-        })
+        headers = {"Content-Type": "application/json"}
+        if self._key:
+            headers["Authorization"] = f"Bearer {self._key}"
+        request = urllib.request.Request(self.endpoint, data=json.dumps(payload).encode(), headers=headers)
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
-        with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+        # A session's own server is reached directly, never through the host's web proxy.
+        handlers = (urllib.request.ProxyHandler({}),) if self.local else ()
+        # A self-hosted reasoning model may think through a long max_tokens before it answers.
+        timeout = 300 if self.local else 60
+        with urllib.request.build_opener(NoRedirect, *handlers).open(request, timeout=timeout) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("Provider response too large")
@@ -218,9 +285,10 @@ class GeminiRouter:
         maximum = arguments.get("max_tokens", 2048)
         if type(maximum) is not int or not 1 <= maximum <= 16384:
             raise ValueError("max_tokens must be 1..16384")
-        payload = {"model": MODEL, "max_tokens": maximum, "messages": [],
-                   "provider": {"require_parameters": True, "allow_fallbacks": False,
-                                "max_price": dict(MAX_PRICE)}, "stream": False}
+        # OpenRouter's provider routing has no meaning on a session's own server.
+        provider = {} if self.local else {"provider": {"require_parameters": True, "allow_fallbacks": False,
+                                                       "max_price": dict(MAX_PRICE)}}
+        payload = {"model": self.model, "max_tokens": maximum, "messages": [], **provider, "stream": False}
         image_reserve = 0
         image_count = 0
         image_bytes = 0
@@ -315,9 +383,13 @@ class GeminiRouter:
 
     def execute(self, payload, reservation):
         response = self._send(payload)
-        if response.get("model") != MODEL:
+        if response.get("model") != self.model:
             raise ValueError("Provider returned an unexpected model")
         usage = response.get("usage", {})
+        if self.local and isinstance(usage, dict):
+            # A self-hosted server reports tokens but bills nothing; zero cost releases the
+            # call's dollar reservation in the session ledger.
+            usage = {**usage, "cost": 0.0}
         tokens = usage.get("total_tokens")
         if type(tokens) is not int or not 0 <= tokens <= reservation:
             raise ValueError("Missing or excessive provider usage; reservation retained")
@@ -328,5 +400,5 @@ class GeminiRouter:
         if not isinstance(message, dict):
             raise ValueError('Invalid provider message')
         # The response is data for the controller, never host code or actions.
-        return {"model": MODEL, "message": message, "finish_reason": choices[0].get("finish_reason"),
+        return {"model": self.model, "message": message, "finish_reason": choices[0].get("finish_reason"),
                 "usage": usage, "cost_usd": usage.get("cost")}, tokens

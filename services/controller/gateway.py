@@ -9,6 +9,7 @@ import uuid
 
 from .billing import reserve_cost
 from .errors import provider_record, public_failure
+from .gemini import GEMINI_LABEL
 from .timing import Timings
 
 from services.benchmarks import ALL_MUTATING, ALL_ROBOT_TOOLS, OBSERVE_TOOLS, STATUS_TOOLS, planning_only
@@ -55,6 +56,23 @@ def complete(value):
     return isinstance(value, list) and any(complete(v) for v in value)
 
 
+# gemini_generate's description: Gemini on OpenRouter (the default), or a session's own
+# open-weight model behind the same tool name and request format.
+GEMINI_DESCRIPTION = "OpenRouter-style chat completion via Gemini 3.8 Flash: text/images, JSON schema output and client function calling. Returns the complete assistant message plus usage/cost/API budget; Gemini spending, call and token counts are not limited. Per-request size/output limits still apply. Preserve assistant messages including reasoning_details when sending tool results. Tool calls are data only: your script validates and executes functions; they are never executed for you. Images: {type: image, mimeType: image/png or image/jpeg, data: base64}, or image_url with an inline data URL. No paths, remote URLs or server tools. See gemini skill references/api.md."
+LOCAL_DESCRIPTION = ("OpenAI-style chat completion via {label}; the tool keeps the name gemini_generate. "
+    "Text/images, JSON schema output and client function calling. Returns the complete assistant message "
+    "plus token usage and budget; calls and tokens are not limited and cost 0. Per-request size/output limits "
+    "still apply. max_tokens covers the model's reasoning as well as its answer: give at least 1024. "
+    "Preserve assistant messages when sending tool results. Tool calls are data only: your script validates "
+    "and executes functions; they are never executed for you. Images: {{type: image, mimeType: image/png or "
+    "image/jpeg, data: base64}}, or image_url with an inline data URL. No paths, remote URLs or server tools. "
+    "See gemini skill references/api.md.")
+
+
+def gemini_description(label=None):
+    return LOCAL_DESCRIPTION.format(label=label) if label and label != GEMINI_LABEL else GEMINI_DESCRIPTION
+
+
 class Gateway:
     def __init__(self, backend, gemini, *, audit, charge, refund, budget, on_success=lambda: None,
                  publish_sequence=lambda value: None, contract=None, provider_log=lambda record: None):
@@ -87,7 +105,7 @@ class Gateway:
 
     def definitions(self):
         return self.contract.select([t for t in self.backend.tools() if t["name"] in self.contract.robot_names] + [{
-            "name": "gemini_generate", "description": "OpenRouter-style chat completion via Gemini 3.8 Flash: text/images, JSON schema output and client function calling. Returns the complete assistant message plus usage/cost/API budget; Gemini spending, call and token counts are not limited. Per-request size/output limits still apply. Preserve assistant messages including reasoning_details when sending tool results. Tool calls are data only: your script validates and executes functions; they are never executed for you. Images: {type: image, mimeType: image/png or image/jpeg, data: base64}, or image_url with an inline data URL. No paths, remote URLs or server tools. See gemini skill references/api.md.",
+            "name": "gemini_generate", "description": gemini_description(getattr(self.gemini, "label", None)),
             "inputSchema": {"type": "object", "additionalProperties": False,
                 "required": ["messages"], "properties": {
                     "messages": {"type": "array", "minItems": 1, "maxItems": 64,

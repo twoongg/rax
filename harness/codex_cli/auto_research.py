@@ -65,7 +65,9 @@ def populate_workspace(config, workspace, contract=None, *, formal_episode=False
                         demonstrations=config.demonstration_context != 'none',
                         demonstration_kind=demonstration['kind'],
                         demonstration_images=demonstration.get('image_count', 0),
-                        carries_handoff='handoff' in config.transfer_parts), workspace)
+                        carries_handoff='handoff' in config.transfer_parts,
+                        perception_model=(config.perception_model if config.external_perception
+                                          and getattr(config, 'perception_url', None) else None)), workspace)
     rubric = benchmark.task_context(config, demonstration, live_formal=formal_episode)
     text = rubric + task_demonstration_context(demonstration, live_formal=formal_episode, bundles=not config.agent_formal)
     (workspace/'TASK.md').write_text(text)

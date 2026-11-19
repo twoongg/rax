@@ -1,14 +1,21 @@
 ---
 name: gemini
 {% if formal_episode %}
-description: Use Gemini 3.8 Flash through MCP for text/image prompts, structured JSON output and function calling during this episode, from tool calls or your own Python.
+description: Use {{ perception_name }} through MCP for text/image prompts, structured JSON output and function calling during this episode, from tool calls or your own Python.
 {% else %}
-description: Use Gemini 3.8 Flash through MCP for text/image prompts, structured JSON output, client function calling and API usage tracking. Use for interactive prompt testing or model calls inside Python controllers.
+description: Use {{ perception_name }} through MCP for text/image prompts, structured JSON output, client function calling and API usage tracking. Use for interactive prompt testing or model calls inside Python controllers.
 {% endif %}
 ---
 
 # Gemini
 
+{% if perception_model %}
+In this session the `gemini_generate` tool is served by `{{ perception_model }}`, an
+open-weight vision-language model on the session's own server, not by Gemini. The
+tool keeps its name, request format and reply format; "Gemini" in this skill means
+that tool.
+
+{% endif %}
 Write your own prompts and response-processing code. The tool adds no perception
 instructions, task-solving logic or action selection.
 Use the `gemini_generate` tool for interactive calls; in a running
@@ -88,11 +95,19 @@ reply = ctx.call("gemini_generate", messages=[{
         {"type": "text", "text": "Describe the visible objects and their relative positions."},
         image,
     ],
-}], max_tokens=256)
+}], max_tokens={{ 1024 if perception_model else 256 }})
 result = json.loads(reply["content"][0]["text"])
 print(result["message"], result["usage"], result["budget"])
 ```
 
+{% if perception_model %}
+`max_tokens` covers reasoning as well as the visible answer. The model reasons before
+every answer, and the `reasoning` field has no effect on it: with a small budget
+(for example 256) it can spend everything on reasoning and return no answer. Give
+at least 1024, and 4096–8192 for several images or open-ended visual analysis.
+`finish_reason="length"` means the answer is incomplete: retry with a larger
+budget; never act on a partial answer.
+{% else %}
 `max_tokens` covers reasoning as well as the visible answer. Without a `reasoning`
 field, Gemini chooses its own reasoning depth and can spend most of a ~1000-token
 budget before answering. For higher reasoning, or open-ended visual analysis,
@@ -100,6 +115,7 @@ increase `max_tokens` well above the expected answer length (for example 4096–
 For short answers, set `reasoning={"effort": "low"}`. `finish_reason="length"`
 means the answer is incomplete: retry with a larger budget or lower effort; never
 act on a partial answer.
+{% endif %}
 
 Use ordinary Python for file reads, image processing and base64 encoding. For JPEG,
 set `mimeType` to `image/jpeg`.
@@ -122,9 +138,15 @@ directly (select the intended camera from the response order/metadata).
 Limits: eight images per call, 4 MiB per image, 8 MiB total, at most 4096×4096
 pixels per image; PNG/JPEG only, no animation. Resize or compress locally if needed.
 Supplied images are controller input, not trusted evidence of task success.
+{% if perception_model %}
+The tool calls `{{ perception_model }}` on the session's own server; no credentials
+are involved. Results contain `message`, `finish_reason`, `usage`, `cost_usd`
+(always 0: the model is self-hosted) and cumulative `budget`.
+{% else %}
 The tool calls Gemini 3.8 Flash through OpenRouter; its credentials stay outside
 your workspace. Results contain `message`, `finish_reason`, `usage`, `cost_usd`
 and cumulative/remaining `budget`; missing provider cost is `null`.
+{% endif %}
 Spending has no session limit; see [Spending limit](references/api.md#spending-limit) for
 what the returned `budget` reports. Function requests in
 `message.tool_calls` are data, never automatically executed. Validate and dispatch

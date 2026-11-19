@@ -21,7 +21,7 @@ from .backend import make_backend
 from .batch import import_rehearsed_bundle
 from .config import Configuration
 from .errors import provider_record
-from .gemini import MAX_REQUEST_BYTES
+from .gemini import MAX_REQUEST_BYTES, perception_label
 from .sandbox import BundleSandbox
 from .supervisor import Supervisor
 
@@ -73,8 +73,9 @@ class Channel:
 
 
 class RemoteGemini:
-    def __init__(self, channel):
+    def __init__(self, channel, label=None):
         self.channel = channel
+        self.label = label  # The parent's model, for the tool description.
 
     def prepare(self, arguments):
         return tuple(self.channel.request('prepare', arguments=arguments))
@@ -87,7 +88,7 @@ class WorkerSupervisor(Supervisor):
     """Charges the parent's session ledger instead of a private one."""
     def __init__(self, config, backend_factory, channel, **kwargs):
         self.channel = channel
-        super().__init__(config, backend_factory, RemoteGemini(channel), **kwargs)
+        super().__init__(config, backend_factory, RemoteGemini(channel, perception_label(config)), **kwargs)
 
     def budget(self):
         return self.channel.request('budget')
