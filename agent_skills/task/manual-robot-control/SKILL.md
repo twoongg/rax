@@ -93,6 +93,10 @@ Use these skills as needed rather than loading every reference up front:
 {% if camera_geometry %}
 - [Object localization](../object-localization/SKILL.md) for metric positions of
   visible object points from the current images.
+{% if robodojo %}
+- [Point cloud](../point-cloud/SKILL.md) for a whole object from depth: its centre,
+  footprint, top height and yaw, grown from one pixel.
+{% endif %}
 {% else %}
 - [Object localization](../object-localization/SKILL.md) to locate visible object
   points from the current images.

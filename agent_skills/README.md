@@ -16,7 +16,7 @@ to a skill of the same name or replaces them, and a layer with no directory is s
 | `task/` | `manual-robot-control`, `in-context-action-learning`, `experience-memory` |
 | `coordination/` | `multi-env-exploration`, `multi-agent-exploration` |
 | `perception/common/` | `wrist-camera-inspection` |
-| `perception/<mode>-<robot>/` | `object-localization` for that mode and robot |
+| `perception/<mode>-<robot>/` | `object-localization` for that mode and robot; `point-cloud` for depth on RoboDojo |
 | `control/<robot>/` | the robot's `robot-interface` and motion skills |
 | `auto-research/` | `autonomous-control`, `gemini`, `transfer-handoff`, and the formal-copy variants of `autonomous-control` and `experience-memory` |
 
@@ -30,6 +30,7 @@ ARX X5, table-top) or `behavior` (R1Pro, BEHAVIOR-1K). The agent sees one flat
 | `robot-interface` | motion tools, bounded EEF steps, environment selection, pose records | action rows, frames, odometry, tool choice, environment selection, pose records |
 | `free-space-move` | cuRobo single-arm moves | cuRobo arm and trunk moves, local IK |
 | `object-localization` | depth: `robodojo_pixel_to_position`; RGB-only: images and measured robot poses, without depth or camera geometry | depth: `behavior_pixel_to_position` (always RGB-D) |
+| `point-cloud` | depth only: `point_cloud.py`, which the agent copies into its project (`cloud`, and `segment` of one object from a pixel) | - |
 | `pose-math`, `action-preview`, `action-search` | yes | - |
 | `base-navigation`, `motion-preview` | - | yes |
 

@@ -70,6 +70,10 @@ later session on this task with new layouts.
    an empty arm's wrist camera closer. Control the robot directly through the MCP
    tools, and confirm success with `evaluate` or native `task_complete: true` before
    automating.
+{% if robodojo and camera_geometry %}
+   To measure an object's centre, footprint, top height or yaw from depth, use
+   [point-cloud](.agents/skills/point-cloud/SKILL.md).
+{% endif %}
 {% if agent_formal %}
 2. **Automate what you did.** Read
    [autonomous-control](.agents/skills/autonomous-control/SKILL.md) and its section

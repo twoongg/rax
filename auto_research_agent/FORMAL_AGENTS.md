@@ -44,6 +44,10 @@ The skill links below are entry points; read only what the next step needs.
 - [object-localization](.agents/skills/object-localization/SKILL.md) for positions of
   visible object points, and
   [wrist-camera-inspection](.agents/skills/wrist-camera-inspection/SKILL.md) for close-ups.
+{% if robodojo and camera_geometry %}
+- [point-cloud](.agents/skills/point-cloud/SKILL.md) for a whole object from depth:
+  centre, footprint, top height and yaw.
+{% endif %}
 - [free-space-move](.agents/skills/free-space-move/SKILL.md) for moving a hand to a pose.
 - [gemini](.agents/skills/gemini/SKILL.md) for visual and spatial perception.
 
