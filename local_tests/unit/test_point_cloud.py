@@ -75,7 +75,7 @@ def render(T, boxes):
     return rgb.reshape(HEIGHT, WIDTH, 3), depth.reshape(HEIGHT, WIDTH).astype(np.float32)
 
 
-def reply(boxes, *, cameras=None, with_depth=True, eef=None):
+def reply(boxes, *, cameras=None, with_depth=True, eef=None, spheres=None):
     """A robodojo_observe reply: JSON text, RGB blocks, then depth blocks, indexed by attachments."""
     cameras = cameras or {
         'cam_high': look_at(ORIGIN + [0.0, -0.55, TABLE_Z + 0.55], ORIGIN + [0.0, 0.0, TABLE_Z]),
@@ -97,6 +97,8 @@ def reply(boxes, *, cameras=None, with_depth=True, eef=None):
               'camera_parameters': {} if not with_depth else {
                   name: {'intrinsic_matrix': K.tolist(), 'camera_to_world_usd': T.tolist(),
                          'resolution': [WIDTH, HEIGHT]} for name, T in cameras.items()}}
+    if spheres is not None:
+        packet['robot_spheres'] = {'step_id': 7, 'frame': 'environment_origin', 'spheres_m': spheres}
     return {'content': [{'type': 'text', 'text': json.dumps(packet)}, *content]}
 
 
@@ -324,3 +326,71 @@ def test_profile_finds_thin_pins_at_one_end_of_a_small_object(yaw):
     assert pins['width'] < 0.6 * body['width'] and pins['top_z'] < body['top_z'] - 0.006
     facing = pc.flip(part) if pins is rows[0] else part['obb']  # +x now points at the pins.
     assert abs(((facing['yaw_deg'] - yaw + 180.0) % 360.0) - 180.0) < 3.0
+
+
+def box_spheres(item, cell=0.01, below=None):
+    """Spheres filling a box, in the environment frame, as the server's cover of a robot
+    link gives them; `below` keeps only those under that environment height."""
+    count = np.maximum(1, np.ceil(item['size'] / cell)).astype(int)
+    axes = [((np.arange(k) + 0.5) / k - 0.5) * size for k, size in zip(count, item['size'])]
+    grid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1).reshape(-1, 3)
+    c, s = math.cos(item['yaw']), math.sin(item['yaw'])
+    rotation = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    centre = np.array([*item['centre'], TABLE_Z + item['lift'] + item['size'][2] / 2]) - ORIGIN
+    centres = grid @ rotation.T + centre
+    if below is not None:
+        centres = centres[centres[:, 2] < below]
+    radius = 0.5 * float(np.linalg.norm(item['size'] / count))
+    return np.c_[centres, np.full(len(centres), radius)].tolist()
+
+
+# A hand hovering 8 mm over the red box: close enough to grow into it.
+HAND = box((0.03, 0.02), (0.06, 0.04, 0.04), 30.0, (90, 90, 90), lift=0.058)
+HAND_LINK6 = [0.03, 0.02, TOP + 0.058 + 0.04 + 0.03]
+AWAY = [-0.3, -0.3, TOP + 0.3]
+
+
+def test_without_spheres_an_object_under_the_hand_is_lost_with_it():
+    obs = pc.observation(reply([RED, GREEN, HAND], eef=[HAND_LINK6, AWAY]))
+    assert obs.spheres is None
+    assert [item['label'] for item in pc.objects(obs)] == ['green · 8x5x3 cm']
+
+
+def test_robot_spheres_remove_the_hand_and_keep_the_object_under_it():
+    obs = pc.observation(reply([RED, GREEN, HAND], eef=[HAND_LINK6, AWAY], spheres=box_spheres(HAND)))
+    assert obs.spheres.shape[1] == 4
+    green, red = pc.objects(obs)
+    assert green['label'] == 'green · 8x5x3 cm' and not red['robot'] and red['supported']
+    assert np.allclose(red['obb']['center'][:2], (0.03, 0.02), atol=0.004)
+    assert abs(red['obb']['yaw_deg'] - 30.0) < 3.0
+    assert np.allclose(red['obb']['size'][:2], (0.06, 0.04), atol=0.004)
+    # Points within 2 cm of the hand go too: the top of the box under it is cut away.
+    assert TOP + 0.02 < red['top_z'] < TOP + 0.04
+    assert len(pc.objects(obs, include_robot=True)) == 2
+    hand = pc.observation(reply([HAND], spheres=box_spheres(HAND)))
+    assert pc.objects(hand, include_robot=True) == []
+
+
+def test_a_leftover_of_the_arm_near_its_spheres_is_marked_robot():
+    # The cover misses the arm's top: what is left floats close to the body.
+    obs = pc.observation(reply([RED, ARM], spheres=box_spheres(ARM, below=TOP + 0.13)))
+    assert [item['label'] for item in pc.objects(obs)] == ['red · 6x4x5 cm']
+    leftover = [item for item in pc.objects(obs, include_robot=True) if item['label'] != 'red · 6x4x5 cm']
+    assert len(leftover) == 1 and leftover[0]['robot'] and not leftover[0]['supported']
+
+
+def test_cloud_and_segment_drop_the_robot_only_with_spheres():
+    plain = pc.observation(reply([RED, HAND]))
+    with pytest.raises(ValueError, match='robot_spheres=True'):
+        pc.cloud(plain, drop_robot=True)
+    obs = pc.observation(reply([RED, HAND], spheres=box_spheres(HAND)))
+    xyz, _, _ = pc.cloud(obs, drop_robot=True)
+    assert not pc.robot_mask(obs, xyz).any() and pc.robot_mask(obs, pc.cloud(obs)[0]).any()
+    hand_top = [0.03, 0.02, TOP + 0.058 + 0.04]
+    with pytest.raises(ValueError, match='on the robot'):
+        pc.segment(obs, 'cam_high', *pixel_of(obs, 'cam_high', hand_top))
+    # A point on the face of the red box that looks towards cam_high, well under the hand.
+    side = [0.03 + 0.0198 * math.sin(math.radians(30.0)), 0.02 - 0.0198 * math.cos(math.radians(30.0)),
+            TOP + 0.015]
+    part = pc.segment(obs, 'cam_high', *pixel_of(obs, 'cam_high', side))
+    assert part['top_z'] < TOP + 0.04 and part['label'].startswith('red')

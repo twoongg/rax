@@ -1,19 +1,21 @@
 """Point clouds from a RoboDojo observation: whole objects from depth, not only one point.
 
 Uses only what `robodojo_observe` or a motion tool returns: RGB images, metric depth
-images, camera calibration and the measured link6 positions. Every 3-D value is in the
-environment frame (metres) that robot commands and `robodojo_pixel_to_position` use.
+images, camera calibration, the measured link6 positions and, when asked for, the spheres
+that cover the robot's own body. Every 3-D value is in the environment frame (metres)
+that robot commands and `robodojo_pixel_to_position` use.
 
     from point_cloud import observation, objects, segment, local, world, overlay
 
-    obs = observation(ctx.call("robodojo_observe"))
+    obs = observation(ctx.call("robodojo_observe", robot_spheres=True))
     for item in objects(obs):                       # every object on the table, no pixel needed
         print(item["index"], item["label"], item["obb"])
     part = segment(obs, "cam_high", 412, 233)       # one object grown from a chosen pixel
 
 Needs numpy, scipy and Pillow (the agent's Python has them). Copy this file into your
-project folder so registered bundles carry it. The region growing, its colour test and
-the object list follow the `cloud`, `segment` and `objects` calls of AMP's robot SDK.
+project folder so registered bundles carry it. The region growing, its colour test, the
+robot removal and the object list follow the `cloud`, `segment` and `objects` calls of
+AMP's robot SDK.
 """
 import base64
 import colorsys
@@ -31,7 +33,10 @@ CAMERAS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
 VOXEL_M = 0.004            # Segmentation grid; a segment's points are the original ones.
 INTENSITY_WEIGHT = 0.1     # Brightness share of the colour feature that color_tol compares.
 MIN_SEGMENT_POINTS = 20
-ROBOT_TOUCH_M = 0.05       # A part reaching this close to a link6 position is the robot's.
+ROBOT_INFLATE_M = 0.02     # Points this close to a robot sphere are the robot's body.
+REMNANT_M = 0.05           # A part off the table lying wholly this close to the body...
+REMNANT_LIFT_M = 0.02      # ...with its lowest point this high is a leftover of the robot.
+ROBOT_TOUCH_M = 0.05       # Without spheres: a part this close to a link6 position is the robot's.
 FLOAT_M = 0.04             # A part whose lowest point is this far above the table...
 SUPPORT_GAP_M = 0.015      # ...and has nothing this close beneath it floats.
 TINY_VOXELS = 20           # A colour region this small joins the neighbour it touches most.
@@ -46,8 +51,10 @@ class Observation:
     rgb[camera]: (h, w, 3) uint8; depth[camera]: (h, w) float32 metres, 0 = no depth;
     K[camera]: 3x3 intrinsics in RGB pixels; T[camera]: 4x4 camera-to-world pose (USD
     camera axes: +X right, +Y up, -Z forward); origin: the environment origin in world
-    coordinates; eef: (arms, 3) measured link6 positions; cameras: the cameras with both
-    depth and calibration.
+    coordinates; eef: (arms, 3) measured link6 positions; spheres: (S, 4) [x, y, z, radius]
+    covering the robot's body, or None unless the reply came from
+    robodojo_observe(robot_spheres=True); cameras: the cameras with both depth and
+    calibration.
     """
 
     def __init__(self, reply):
@@ -66,6 +73,13 @@ class Observation:
         except (TypeError, ValueError):
             self.eef = np.zeros((0, 3))
         self.eef = self.eef[np.isfinite(self.eef).all(axis=1)]
+        self.spheres = None
+        robot = packet.get("robot_spheres")
+        if robot:
+            if robot.get("step_id", self.step_id) != self.step_id:
+                raise ValueError("robot_spheres belong to another step than the images")
+            spheres = np.asarray(robot.get("spheres_m") or [], dtype=np.float64).reshape(-1, 4)
+            self.spheres = spheres[np.isfinite(spheres).all(axis=1)]
         self.rgb, self.depth, self.K, self.T = {}, {}, {}, {}
         depth_info = packet.get("depth") or {}
         for item in packet.get("attachments") or []:
@@ -129,16 +143,49 @@ def _in_box(xyz, box):
     return keep
 
 
-def cloud(obs, cameras=None, *, stride=1, max_depth=2.0, box=None):
+def robot_mask(obs, xyz, *, inflate_m=ROBOT_INFLATE_M):
+    """True for each point within inflate_m of the robot's body spheres. Needs an
+    observation from robodojo_observe(robot_spheres=True)."""
+    obs = observation(obs)
+    if obs.spheres is None:
+        raise ValueError("No robot spheres; observe with robodojo_observe(robot_spheres=True)")
+    xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    hit = np.zeros(len(xyz), dtype=bool)
+    if not len(xyz) or not len(obs.spheres):
+        return hit
+    centres, reach = obs.spheres[:, :3], obs.spheres[:, 3] + inflate_m
+    near = np.flatnonzero(np.all((xyz >= (centres - reach[:, None]).min(axis=0))
+                                 & (xyz <= (centres + reach[:, None]).max(axis=0)), axis=1))
+    if not len(near):
+        return hit
+    found = cKDTree(xyz[near]).query_ball_point(centres, reach)
+    found = [np.asarray(f, dtype=np.int64) for f in found if f]
+    if found:
+        hit[near[np.unique(np.concatenate(found))]] = True
+    return hit
+
+
+def _drop_robot(obs, drop_robot):
+    """Whether to remove the robot's body: by default, whenever the spheres are there."""
+    if drop_robot is None:
+        return obs.spheres is not None
+    if drop_robot and obs.spheres is None:
+        raise ValueError("drop_robot needs robot spheres; observe with "
+                         "robodojo_observe(robot_spheres=True)")
+    return bool(drop_robot)
+
+
+def cloud(obs, cameras=None, *, stride=1, max_depth=2.0, box=None, drop_robot=False):
     """Every valid depth pixel of `cameras` (default: all with depth) as a 3-D point.
 
     Returns (xyz (N, 3) float32 metres, rgb (N, 3) uint8, cam (N,) the point's camera as an
     index into obs.cameras). `box` = ((x0, x1), (y0, y1), (z0, z1)) keeps only the
-    points inside it. Only visible surfaces appear; nothing is removed but what `box` and
-    `max_depth` cut.
+    points inside it. drop_robot=True removes the points within 2 cm of the robot's body
+    spheres. Only visible surfaces appear; nothing else is removed but what `max_depth` cuts.
     """
     obs = observation(obs)
     cameras = _camera_list(obs, cameras)
+    drop_robot = _drop_robot(obs, drop_robot)
     xyzs, rgbs, cams = [], [], []
     for camera in cameras:
         depth = obs.depth[camera]
@@ -157,6 +204,9 @@ def cloud(obs, cameras=None, *, stride=1, max_depth=2.0, box=None):
         if box is not None:
             inside = _in_box(xyz, box)
             xyz, rgb = xyz[inside], rgb[inside]
+        if drop_robot:
+            body = robot_mask(obs, xyz)
+            xyz, rgb = xyz[~body], rgb[~body]
         xyzs.append(xyz.astype(np.float32))
         rgbs.append(np.asarray(rgb, dtype=np.uint8))
         cams.append(np.full(len(xyz), obs.cameras.index(camera), dtype=np.int16))
@@ -379,14 +429,15 @@ def _check(radius_mm, color_tol):
 
 
 def segment(obs, camera, u, v, *, radius_mm=11, color_tol=None, cameras=None, box=None,
-            table_z=None, table_margin_m=0.005, reach_m=0.3, max_depth=2.0):
+            table_z=None, table_margin_m=0.005, reach_m=0.3, max_depth=2.0, drop_robot=None):
     """One object grown from the point under RGB pixel (u, v) of `camera`.
 
     The cloud of `cameras` (default: all with depth) loses the table (everything below
     table_z + table_margin_m; table_z defaults to table_height of cam_high's cloud) and
-    what lies outside `box`. Points then join while neighbours are within radius_mm, and,
-    with color_tol (0.08 works), while their colours stay close. The robot is not removed:
-    an object touching the gripper grows into it; cut it off with `box` or color_tol.
+    what lies outside `box`, and, when the observation has robot spheres (drop_robot=None
+    means then), the robot's body. Points then join while neighbours are within radius_mm,
+    and, with color_tol (0.08 works), while their colours stay close. Without spheres an
+    object touching the gripper grows into it; cut it off with `box` or color_tol.
 
     Returns describe()'s dict plus seed and cameras. All of it describes the visible
     surface only.
@@ -396,7 +447,11 @@ def segment(obs, camera, u, v, *, radius_mm=11, color_tol=None, cameras=None, bo
     radius = _check(radius_mm, color_tol)
     cameras = _camera_list(obs, cameras)
     seed = pixel_point(obs, camera, u, v)
-    xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box)
+    drop_robot = _drop_robot(obs, drop_robot)
+    if drop_robot and robot_mask(obs, seed)[0]:
+        raise ValueError("The pixel is on the robot (within 2 cm of its body); pick a pixel "
+                         "on the object farther from the gripper")
+    xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box, drop_robot=drop_robot)
     table_z = _table_z(obs, cameras, max_depth) if table_z is None else float(table_z)
     if seed[2] <= table_z + table_margin_m:
         raise ValueError(f"The pixel hits the table (z {seed[2]:.4f} m, table {table_z:.4f} m); "
@@ -419,26 +474,32 @@ def segment(obs, camera, u, v, *, radius_mm=11, color_tol=None, cameras=None, bo
 
 
 def objects(obs, cameras=None, *, radius_mm=11, color_tol=None, box=None, table_z=None,
-            table_margin_m=0.005, min_points=50, include_robot=False, max_depth=2.0):
+            table_margin_m=0.005, min_points=50, include_robot=False, max_depth=2.0,
+            drop_robot=None):
     """Every object on the table, with no pixel to choose: what a controller uses to find
     objects again in each new layout.
 
-    The cloud of `cameras` (default: all with depth) loses the table and what lies outside
-    `box`; the rest splits into parts that are not connected within radius_mm (with
-    color_tol, also at colour edges). A small fragment within 22 mm of a part at least four
-    times larger and of similar colour joins it (a thin edge or tab seen apart from its
-    body). Each part gets describe()'s dict plus:
-    robot: it reaches within 5 cm of a measured link6 position (an arm, or an object held
-    or touched by the gripper); supported: it rests on the table or on another part
-    (False: it floats, like a piece of an arm). Unless include_robot, robot and floating
-    parts and parts under min_points are left out. The list is sorted by footprint (obb
+    The cloud of `cameras` (default: all with depth) loses the table, what lies outside
+    `box` and, when the observation has robot spheres, every point within 2 cm of the
+    robot's body (drop_robot=None means: whenever spheres are there). The rest splits into
+    parts that are not connected within radius_mm (with color_tol, also at colour edges).
+    A small fragment within 22 mm of a part at least four times larger and of similar
+    colour joins it (a thin edge or tab seen apart from its body). Each part gets
+    describe()'s dict plus:
+    robot: with spheres, it lies off the table and wholly within 5 cm of the robot's body
+    (a leftover of the arm); without them, it reaches within 5 cm of a measured link6
+    position (an arm, or an object held or touched by the gripper). supported: it rests on
+    the table or on another part (False: it floats, like a piece of an arm or a held
+    object). Unless include_robot, robot and floating parts and parts under min_points are
+    left out. The list is sorted by footprint (obb
     length x width), largest first, and `index` is the position in it; indices are not
     kept from one call to the next, so choose objects by size, colour and position.
     """
     obs = observation(obs)
     radius = _check(radius_mm, color_tol)
     cameras = _camera_list(obs, cameras)
-    xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box)
+    drop_robot = _drop_robot(obs, drop_robot)
+    xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box, drop_robot=drop_robot)
     table_z = _table_z(obs, cameras, max_depth) if table_z is None else float(table_z)
     above = np.flatnonzero(xyz[:, 2] > table_z + table_margin_m)
     if not len(above):
@@ -453,8 +514,11 @@ def objects(obs, cameras=None, *, radius_mm=11, color_tol=None, box=None, table_
     for member in parts:
         item = describe(xyz[member], rgb[member], table_z=table_z)
         points = item["points"].astype(np.float64)
-        item["robot"] = bool(len(obs.eef)) and float(
-            np.min(np.linalg.norm(points[:, None, :] - obs.eef[None], axis=2))) < ROBOT_TOUCH_M
+        if drop_robot:
+            item["robot"] = _remnant(points, obs.spheres, table_z)
+        else:
+            item["robot"] = bool(len(obs.eef)) and float(
+                np.min(np.linalg.norm(points[:, None, :] - obs.eef[None], axis=2))) < ROBOT_TOUCH_M
         found.append(item)
     for item in found:
         bottom = item["bottom_z"]
@@ -474,6 +538,15 @@ def objects(obs, cameras=None, *, radius_mm=11, color_tol=None, box=None, table_
         item["index"] = index
         item["cameras"] = cameras
     return found
+
+
+def _remnant(points, spheres, table_z):
+    """A part off the table lying wholly within REMNANT_M of the robot's body: the arm."""
+    if not len(spheres) or float(points[:, 2].min()) < table_z + REMNANT_LIFT_M:
+        return False
+    sample = points[::max(1, len(points) // 1500)]
+    gap = np.linalg.norm(sample[:, None, :] - spheres[None, :, :3], axis=2) - spheres[None, :, 3]
+    return bool(gap.min(axis=1).max() < REMNANT_M)
 
 
 def _box(item):
