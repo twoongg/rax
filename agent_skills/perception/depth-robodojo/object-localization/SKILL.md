@@ -32,7 +32,8 @@ privileged object poses, segmentation or scene-manager state.
      do not average it away.
    - A point with `Low_Confidence` is not reliable geometry.
 5. Treat `position_environment_m` as a visible surface point, not an object
-   center or pose.
+   center or pose. For an object's centre, footprint, top height or yaw, use
+   [point-cloud](../point-cloud/SKILL.md).
 
 ## Choose the views
 
