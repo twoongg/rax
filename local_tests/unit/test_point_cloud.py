@@ -40,9 +40,10 @@ def look_at(position, target):
     return T
 
 
-def box(centre_env_xy, size, yaw_deg, rgb):
+def box(centre_env_xy, size, yaw_deg, rgb, lift=0.0):
+    """A box standing on the table, or with its bottom `lift` metres above it."""
     return {'centre': np.array([*centre_env_xy]) + ORIGIN[:2], 'size': np.array(size, float),
-            'yaw': math.radians(yaw_deg), 'rgb': rgb}
+            'yaw': math.radians(yaw_deg), 'rgb': rgb, 'lift': lift}
 
 
 def render(T, boxes):
@@ -60,7 +61,7 @@ def render(T, boxes):
     for item in boxes:
         c, s = math.cos(-item['yaw']), math.sin(-item['yaw'])
         rotation = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-        centre = np.array([*item['centre'], TABLE_Z + item['size'][2] / 2])
+        centre = np.array([*item['centre'], TABLE_Z + item['lift'] + item['size'][2] / 2])
         p = rotation @ (origin - centre[:, None])
         d = rotation @ direction
         half = item['size'][:, None] / 2
@@ -74,7 +75,7 @@ def render(T, boxes):
     return rgb.reshape(HEIGHT, WIDTH, 3), depth.reshape(HEIGHT, WIDTH).astype(np.float32)
 
 
-def reply(boxes, *, cameras=None, with_depth=True):
+def reply(boxes, *, cameras=None, with_depth=True, eef=None):
     """A robodojo_observe reply: JSON text, RGB blocks, then depth blocks, indexed by attachments."""
     cameras = cameras or {
         'cam_high': look_at(ORIGIN + [0.0, -0.55, TABLE_Z + 0.55], ORIGIN + [0.0, 0.0, TABLE_Z]),
@@ -92,6 +93,7 @@ def reply(boxes, *, cameras=None, with_depth=True):
             attachments.append({'kind': 'depth', 'camera': name, 'content_index': len(content)})
     packet = {'step_id': 7, 'environment_origin_world_m': ORIGIN.tolist(), 'images': list(cameras),
               'depth': depth_maps, 'attachments': attachments,
+              'eef_positions': eef if eef is not None else [[-0.3, 0.3, 0.9], [-0.3, -0.3, 0.9]],
               'camera_parameters': {} if not with_depth else {
                   name: {'intrinsic_matrix': K.tolist(), 'camera_to_world_usd': T.tolist(),
                          'resolution': [WIDTH, HEIGHT]} for name, T in cameras.items()}}
@@ -178,7 +180,9 @@ def test_color_tol_splits_touching_objects_of_different_colours():
     merged = pc.segment(obs, 'cam_high', *seed)
     split = pc.segment(obs, 'cam_high', *seed, color_tol=0.08)
     assert merged['size'][0] > 0.11 and abs(split['size'][0] - 0.06) < 0.006
-    assert np.all(np.all(split['rgb'] == (200, 30, 30), axis=1))
+    # Voxels on the colour edge mix both colours; they fold into one side.
+    assert np.mean(np.all(split['rgb'] == (200, 30, 30), axis=1)) > 0.99
+    assert sorted(item['label'] for item in pc.objects(obs, color_tol=0.08)) == ['blue · 6x4x5 cm', 'red · 6x4x5 cm']
 
 
 def test_segment_refuses_the_table_and_bad_arguments():
@@ -224,3 +228,99 @@ def test_pixel_point_matches_the_pixel_to_position_tool():
                                        method='depth', depth_window_radius=0)
         mine = pc.pixel_point(obs, camera, *pixel, radius=0)
         assert np.abs(mine - tool['position_environment_m']).max() < 0.0015, (camera, pixel, mine, tool)
+
+
+# The table top in the environment frame, and objects for the scene-wide tests.
+TOP = TABLE_Z - ORIGIN[2]
+GREEN = box((-0.12, 0.05), (0.08, 0.05, 0.03), -20.0, (30, 170, 60))
+ARM = box((0.02, -0.12), (0.05, 0.05, 0.05), 0.0, (90, 90, 90), lift=0.12)   # Floats: a piece of an arm.
+
+
+def test_objects_lists_what_stands_on_the_table_without_a_pixel():
+    obs = pc.observation(reply([RED, GREEN, ARM]))
+    found = pc.objects(obs)
+    assert [item['index'] for item in found] == [0, 1]
+    green, red = found  # Largest footprint first.
+    assert np.allclose(green['obb']['center'][:2], (-0.12, 0.05), atol=0.004)
+    assert abs(green['obb']['yaw_deg'] + 20.0) < 3.0 and abs(green['top_z'] - (TOP + 0.03)) < 0.002
+    assert np.allclose(red['obb']['center'][:2], (0.03, 0.02), atol=0.004) and abs(red['obb']['yaw_deg'] - 30.0) < 3.0
+    assert green['label'] == 'green · 8x5x3 cm' and red['label'] == 'red · 6x4x5 cm', (green['label'], red['label'])
+    assert not green['robot'] and green['supported'] and red['table_z'] is not None
+    every = pc.objects(obs, include_robot=True)
+    arm = [item for item in every if not item['supported']]
+    assert len(every) == 3 and len(arm) == 1 and abs(arm[0]['bottom_z'] - (TOP + 0.12)) < 0.003
+
+
+def test_objects_marks_what_the_gripper_reaches_as_robot():
+    gripper = [0.03, 0.02, TOP + 0.05 + 0.03]  # A link6 position 3 cm above the red box.
+    obs = pc.observation(reply([RED, GREEN], eef=[gripper, [-0.3, -0.3, TOP + 0.3]]))
+    assert [item['label'] for item in pc.objects(obs)] == ['green · 8x5x3 cm']
+    every = pc.objects(obs, include_robot=True)
+    assert [item['robot'] for item in every] == [False, True]
+
+
+def test_objects_keeps_a_stacked_object_and_splits_it_by_colour():
+    top = box((0.03, 0.02), (0.04, 0.03, 0.02), 30.0, (30, 30, 200), lift=0.05)
+    obs = pc.observation(reply([RED, top]))
+    assert len(pc.objects(obs)) == 1  # Touching parts join without color_tol.
+    lower, upper = pc.objects(obs, color_tol=0.08)
+    assert upper['supported'] and abs(upper['bottom_z'] - (TOP + 0.05)) < 0.004
+    assert upper['label'].startswith('blue') and lower['label'].startswith('red')
+
+
+def test_profile_tells_the_ends_of_an_object_apart_and_flip_turns_its_frame():
+    # A body with a thin, low tab at its +x end (yaw 30 degrees).
+    body = box((0.0, 0.0), (0.05, 0.032, 0.026), 30.0, (40, 40, 40))
+    tab_centre = 0.035 * np.array([math.cos(math.radians(30)), math.sin(math.radians(30))])
+    tab = box(tuple(tab_centre), (0.02, 0.014, 0.004), 30.0, (40, 40, 40), lift=0.011)
+    obs = pc.observation(reply([body, tab]))
+    (part,) = pc.objects(obs)
+    rows = [row for row in pc.profile(part) if row['n']]
+    tab_end = rows[-1] if part['obb']['yaw_deg'] > 0 else rows[0]
+    body_end = rows[0] if part['obb']['yaw_deg'] > 0 else rows[-1]
+    assert tab_end['width'] < 0.6 * body_end['width'] and tab_end['top_z'] < body_end['top_z'] - 0.005
+    turned = pc.flip(part)
+    assert abs(((turned['yaw_deg'] - part['obb']['yaw_deg']) % 360.0) - 180.0) < 1e-9
+    assert pc.flip(turned)['yaw_deg'] == pytest.approx(part['obb']['yaw_deg'])
+
+
+def test_object_frame_offsets_follow_the_object_to_a_new_layout():
+    offset = np.array([[0.02, -0.01, 0.025]])  # A feature on the box, in the box's own frame.
+    for centre, yaw in (((0.03, 0.02), 30.0), ((-0.05, 0.08), -60.0)):
+        obs = pc.observation(reply([box(centre, (0.06, 0.04, 0.05), yaw, (200, 30, 30))]))
+        (part,) = pc.objects(obs)
+        expected_yaw = math.radians(part['obb']['yaw_deg'])
+        assert abs(part['obb']['yaw_deg'] - yaw) < 3.0
+        point = pc.world(part, offset)[0]
+        c, s = math.cos(expected_yaw), math.sin(expected_yaw)
+        truth = np.array([centre[0] + 0.02 * c + 0.01 * s, centre[1] + 0.02 * s - 0.01 * c])
+        assert np.allclose(point[:2], truth, atol=0.004)
+        assert np.allclose(pc.local(part, pc.world(part, offset)), offset)
+
+
+def test_describe_summarizes_points_cut_with_a_box():
+    obs = pc.observation(reply([RED, GREEN]))
+    xyz, rgb, _ = pc.cloud(obs, box=((0.0, 0.07), (-0.01, 0.06), (TOP + 0.006, TOP + 0.2)))
+    item = pc.describe(xyz, rgb, table_z=TOP)
+    assert item['label'].startswith('red') and abs(item['top_z'] - (TOP + 0.05)) < 0.002
+    with pytest.raises(ValueError, match='three points'):
+        pc.describe(xyz[:2])
+
+
+@pytest.mark.parametrize('yaw', [150.0, -30.0, 60.0, -100.0])
+def test_profile_finds_thin_pins_at_one_end_of_a_small_object(yaw):
+    """A 5 x 3.2 x 2.6 cm body with two 1.5 mm pins 1 cm long at one end, seen by cam_high only."""
+    a = math.radians(yaw)
+    along, across = np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
+    centre = np.array([-0.05, 0.0])
+    scene = [box(tuple(centre), (0.05, 0.032, 0.026), yaw, (235, 235, 235))] + [
+        box(tuple(centre + 0.03 * along + side * across), (0.010, 0.0015, 0.006), yaw, (200, 200, 205), lift=0.010)
+        for side in (-0.00625, 0.00625)]
+    high = {'cam_high': look_at(ORIGIN + [0.0, -0.55, TABLE_Z + 0.55], ORIGIN + [0.0, 0.0, TABLE_Z])}
+    (part,) = pc.objects(pc.observation(reply(scene, cameras=high)))
+    assert abs(part['obb']['size'][0] - 0.06) < 0.004
+    rows = [row for row in pc.profile(part) if row['n']]
+    pins, body = (rows[-1], rows[0]) if rows[-1]['width'] < rows[0]['width'] else (rows[0], rows[-1])
+    assert pins['width'] < 0.6 * body['width'] and pins['top_z'] < body['top_z'] - 0.006
+    facing = pc.flip(part) if pins is rows[0] else part['obb']  # +x now points at the pins.
+    assert abs(((facing['yaw_deg'] - yaw + 180.0) % 360.0) - 180.0) < 3.0

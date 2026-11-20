@@ -30,7 +30,7 @@ ARX X5, table-top) or `behavior` (R1Pro, BEHAVIOR-1K). The agent sees one flat
 | `robot-interface` | motion tools, bounded EEF steps, environment selection, pose records | action rows, frames, odometry, tool choice, environment selection, pose records |
 | `free-space-move` | cuRobo single-arm moves | cuRobo arm and trunk moves, local IK |
 | `object-localization` | depth: `robodojo_pixel_to_position`; RGB-only: images and measured robot poses, without depth or camera geometry | depth: `behavior_pixel_to_position` (always RGB-D) |
-| `point-cloud` | depth only: `point_cloud.py`, which the agent copies into its project (`cloud`, and `segment` of one object from a pixel) | - |
+| `point-cloud` | depth only: `point_cloud.py`, which the agent copies into its project (`objects` on the table, `segment` from a pixel, object-frame offsets) | - |
 | `pose-math`, `action-preview`, `action-search` | yes | - |
 | `base-navigation`, `motion-preview` | - | yes |
 

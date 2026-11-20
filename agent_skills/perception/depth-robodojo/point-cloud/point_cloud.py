@@ -1,21 +1,22 @@
 """Point clouds from a RoboDojo observation: whole objects from depth, not only one point.
 
 Uses only what `robodojo_observe` or a motion tool returns: RGB images, metric depth
-images and camera calibration. Every 3-D value is in the environment frame (metres)
-that robot commands and `robodojo_pixel_to_position` use.
+images, camera calibration and the measured link6 positions. Every 3-D value is in the
+environment frame (metres) that robot commands and `robodojo_pixel_to_position` use.
 
-    from point_cloud import observation, cloud, segment, project, overlay
+    from point_cloud import observation, objects, segment, local, world, overlay
 
     obs = observation(ctx.call("robodojo_observe"))
-    xyz, rgb, cam = cloud(obs)                      # every depth pixel as a point
-    part = segment(obs, "cam_high", 412, 233)       # one object grown from a pixel
-    print(part["centroid"], part["size"], part["top"], part["obb"])
+    for item in objects(obs):                       # every object on the table, no pixel needed
+        print(item["index"], item["label"], item["obb"])
+    part = segment(obs, "cam_high", 412, 233)       # one object grown from a chosen pixel
 
 Needs numpy, scipy and Pillow (the agent's Python has them). Copy this file into your
-project folder so registered bundles carry it. The region growing and its colour test
-follow the `cloud` and `segment` calls of AMP's robot SDK.
+project folder so registered bundles carry it. The region growing, its colour test and
+the object list follow the `cloud`, `segment` and `objects` calls of AMP's robot SDK.
 """
 import base64
+import colorsys
 import io
 import json
 import math
@@ -30,6 +31,13 @@ CAMERAS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
 VOXEL_M = 0.004            # Segmentation grid; a segment's points are the original ones.
 INTENSITY_WEIGHT = 0.1     # Brightness share of the colour feature that color_tol compares.
 MIN_SEGMENT_POINTS = 20
+ROBOT_TOUCH_M = 0.05       # A part reaching this close to a link6 position is the robot's.
+FLOAT_M = 0.04             # A part whose lowest point is this far above the table...
+SUPPORT_GAP_M = 0.015      # ...and has nothing this close beneath it floats.
+TINY_VOXELS = 20           # A colour region this small joins the neighbour it touches most.
+ABSORB_VOXELS = 60         # A part this small joins a much larger, similar-coloured part...
+ABSORB_M = 0.022           # ...this close: a thin edge or tab seen apart from its body.
+COLOR_MERGE = 0.18
 
 
 class Observation:
@@ -38,7 +46,8 @@ class Observation:
     rgb[camera]: (h, w, 3) uint8; depth[camera]: (h, w) float32 metres, 0 = no depth;
     K[camera]: 3x3 intrinsics in RGB pixels; T[camera]: 4x4 camera-to-world pose (USD
     camera axes: +X right, +Y up, -Z forward); origin: the environment origin in world
-    coordinates; cameras: the cameras with both depth and calibration.
+    coordinates; eef: (arms, 3) measured link6 positions; cameras: the cameras with both
+    depth and calibration.
     """
 
     def __init__(self, reply):
@@ -52,6 +61,11 @@ class Observation:
         self.step_id = packet.get("step_id")
         self.origin = np.asarray(packet.get("environment_origin_world_m") or (0.0, 0.0, 0.0),
                                  dtype=np.float64)
+        try:
+            self.eef = np.asarray(packet.get("eef_positions"), dtype=np.float64).reshape(-1, 3)
+        except (TypeError, ValueError):
+            self.eef = np.zeros((0, 3))
+        self.eef = self.eef[np.isfinite(self.eef).all(axis=1)]
         self.rgb, self.depth, self.K, self.T = {}, {}, {}, {}
         depth_info = packet.get("depth") or {}
         for item in packet.get("attachments") or []:
@@ -184,11 +198,31 @@ def table_height(xyz, *, bin_m=0.001):
     return float(np.median(near)), int(len(near))
 
 
+def _table_z(obs, cameras, max_depth):
+    # The overview camera sees mostly table; a close wrist view may see mostly object.
+    overview = ["cam_high"] if "cam_high" in obs.cameras else cameras
+    return table_height(cloud(obs, overview, stride=2, max_depth=max_depth)[0])[0]
+
+
 def _color_feature(rgb):
     """Shading-tolerant colour: chroma over intensity, plus a little intensity."""
     c = np.asarray(rgb, dtype=np.float64) / 255.0
     i = c.mean(axis=1, keepdims=True)
     return np.hstack([(c - i) / (i + 0.03), INTENSITY_WEIGHT * i])
+
+
+def _color_name(rgb):
+    """A coarse English name of an RGB colour."""
+    r, g, b = (float(v) / 255.0 for v in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if v < 0.18:
+        return "black"
+    if s < 0.18 or (s < 0.3 and v < 0.35):
+        return "white" if v > 0.75 else "grey"
+    names = ((15, "red"), (40, "orange"), (70, "yellow"), (165, "green"), (200, "teal"),
+             (255, "blue"), (290, "purple"), (340, "pink"), (361, "red"))
+    name = next(n for limit, n in names if h * 360.0 < limit)
+    return "brown" if name in ("red", "orange", "yellow") and v < 0.55 and s > 0.3 else name
 
 
 def _voxelize(xyz, rgb, size):
@@ -201,9 +235,81 @@ def _voxelize(xyz, rgb, size):
     return centres, colours, inverse
 
 
+def _components(n, edges):
+    edges = np.asarray(edges, dtype=np.int64).reshape(-1, 2)
+    graph = coo_matrix((np.ones(len(edges), dtype=np.int8), (edges[:, 0], edges[:, 1])), shape=(n, n))
+    return connected_components(graph, directed=False)[1]
+
+
+def _fold_tiny(labels, pairs):
+    """Colour regions under TINY_VOXELS (the mixed colours along an edge) join the
+    neighbouring region they share the most links with."""
+    n = int(labels.max()) + 1
+    size = np.bincount(labels, minlength=n)
+    a, b = labels[pairs[:, 0]], labels[pairs[:, 1]]
+    cross = a != b
+    src, dst = np.concatenate([a[cross], b[cross]]), np.concatenate([b[cross], a[cross]])
+    keep = size[src] < TINY_VOXELS
+    if not keep.any():
+        return labels
+    links, count = np.unique(src[keep] * n + dst[keep], return_counts=True)
+    s, d = links // n, links % n
+    order = np.lexsort((-size[d], -count, s))  # Per tiny region: most links, then the larger.
+    s, d = s[order], d[order]
+    first = np.r_[True, s[1:] != s[:-1]]
+    return _components(n, np.stack([s[first], d[first]], axis=1))[labels]
+
+
+def _groups(xyz, rgb, radius, color_tol):
+    """Labels per voxel and the voxel of each point: points join while voxel neighbours
+    are within radius (and, with color_tol, while their colours stay close). Returns
+    (voxel labels, point-to-voxel index, voxel centres, voxel colours, neighbour pairs)."""
+    centres, colours, inverse = _voxelize(xyz, rgb.astype(np.float64), min(VOXEL_M, 0.5 * radius))
+    pairs = cKDTree(centres).query_pairs(radius, output_type="ndarray")
+    linked = pairs
+    if color_tol is not None and len(pairs):
+        feature = _color_feature(colours)
+        linked = pairs[np.linalg.norm(feature[pairs[:, 0]] - feature[pairs[:, 1]], axis=1) < color_tol]
+    labels = _components(len(centres), linked)
+    if color_tol is not None and len(pairs):
+        labels = _fold_tiny(labels, pairs)
+    return labels, inverse, centres, colours, pairs
+
+
+def _absorb(labels, centres, colours, pairs):
+    """Parts under ABSORB_VOXELS join a part at least four times larger, within ABSORB_M
+    and of similar colour, unless the two touch (then colour split them on purpose)."""
+    _, labels = np.unique(labels, return_inverse=True)
+    labels = labels.ravel()
+    n = int(labels.max()) + 1
+    size = np.bincount(labels, minlength=n)
+    small, big = np.flatnonzero(size < ABSORB_VOXELS), np.flatnonzero(size >= ABSORB_VOXELS)
+    if not len(small) or not len(big):
+        return labels
+    feature = _color_feature(colours)
+    mean = np.stack([np.bincount(labels, feature[:, k], n) for k in range(feature.shape[1])], axis=1)
+    mean /= np.maximum(size, 1)[:, None]
+    a, b = labels[pairs[:, 0]], labels[pairs[:, 1]]
+    touching = set(zip(np.minimum(a, b)[a != b].tolist(), np.maximum(a, b)[a != b].tolist()))
+    in_big = np.isin(labels, big)
+    tree, big_labels = cKDTree(centres[in_big]), labels[in_big]
+    edges = []
+    for r in small:
+        distance, nearest = tree.query(centres[labels == r], distance_upper_bound=ABSORB_M)
+        hit = np.isfinite(distance)
+        if not hit.any():
+            continue
+        candidates, count = np.unique(big_labels[nearest[hit]], return_counts=True)
+        t = int(candidates[np.argmax(count)])
+        if (size[t] >= 4 * size[r] and (min(r, t), max(r, t)) not in touching
+                and np.linalg.norm(mean[t] - mean[r]) < COLOR_MERGE):
+            edges.append((r, t))
+    return _components(n, edges)[labels] if edges else labels
+
+
 def _obb(xyz):
     """The smallest upright box around the points: the minimum-area rectangle of their
-    footprint (its x side the longer one), from the table up to their top."""
+    footprint (its x side the longer one), from their bottom up to their top."""
     xy = xyz[:, :2]
     try:
         hull = xy[ConvexHull(xy).vertices]
@@ -214,8 +320,8 @@ def _obb(xyz):
     best = None
     for angle in angles if len(angles) else [0.0]:
         c, s = math.cos(angle), math.sin(angle)
-        local = hull @ np.array([[c, -s], [s, c]])  # Coordinates along (c, s) and (-s, c).
-        low, high = local.min(axis=0), local.max(axis=0)
+        local_xy = hull @ np.array([[c, -s], [s, c]])  # Coordinates along (c, s) and (-s, c).
+        low, high = local_xy.min(axis=0), local_xy.max(axis=0)
         area = float(np.prod(high - low))
         if best is None or area < best[0]:
             best = (area, angle, low, high)
@@ -232,36 +338,66 @@ def _obb(xyz):
             "yaw_deg": math.degrees(yaw)}
 
 
+def describe(points, rgb=None, *, table_z=None):
+    """The summary that segment and objects return, for any points you selected yourself
+    (for example a `cloud(..., box=...)` around a held object).
+
+    A dict: points; rgb; n_points; centroid; aabb [[lo], [hi]]; size (aabb extent); top
+    (centre of the aabb's top face); top_z; bottom_z; obb {center, size, yaw_deg}, the
+    smallest upright box: size [longer side, shorter side, height], yaw of the longer side
+    in degrees about z, in [-90, 90); color (mean RGB); label ("<colour> · LxWxH cm", the
+    height measured from table_z when given); table_z.
+    """
+    part = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    if len(part) < 3:
+        raise ValueError("describe needs at least three points")
+    part_rgb = (np.full((len(part), 3), 180, np.uint8) if rgb is None
+                else np.asarray(rgb, dtype=np.uint8).reshape(-1, 3))
+    low, high = part.min(axis=0).astype(np.float64), part.max(axis=0).astype(np.float64)
+    box = _obb(part.astype(np.float64))
+    color = [int(round(float(c))) for c in part_rgb.astype(np.float64).mean(axis=0)]
+    height = high[2] - (low[2] if table_z is None else float(table_z))
+    dims = "x".join(str(max(1, round(100 * d))) for d in (box["size"][0], box["size"][1], height))
+    return {
+        "points": part, "rgb": part_rgb, "n_points": int(len(part)),
+        "centroid": part.mean(axis=0, dtype=np.float64).tolist(),
+        "aabb": [low.tolist(), high.tolist()], "size": (high - low).tolist(),
+        "top": [float(0.5 * (low[0] + high[0])), float(0.5 * (low[1] + high[1])), float(high[2])],
+        "top_z": float(high[2]), "bottom_z": float(low[2]), "obb": box,
+        "color": color, "label": f"{_color_name(color)} · {dims} cm",
+        "table_z": None if table_z is None else float(table_z),
+    }
+
+
+def _check(radius_mm, color_tol):
+    radius = float(radius_mm) / 1000.0
+    if not 0.002 <= radius <= 0.05:
+        raise ValueError("radius_mm must be in [2, 50]")
+    if color_tol is not None and not color_tol > 0:
+        raise ValueError("color_tol must be a positive number or None")
+    return radius
+
+
 def segment(obs, camera, u, v, *, radius_mm=11, color_tol=None, cameras=None, box=None,
             table_z=None, table_margin_m=0.005, reach_m=0.3, max_depth=2.0):
     """One object grown from the point under RGB pixel (u, v) of `camera`.
 
     The cloud of `cameras` (default: all with depth) loses the table (everything below
     table_z + table_margin_m; table_z defaults to table_height of cam_high's cloud) and
-    what lies outside `box`. Points then join while neighbours are within radius_mm, and, with
-    color_tol (0.08 works), while their colours stay close. The robot is not removed: an
-    object touching the gripper grows into it; cut it off with `box` or color_tol.
+    what lies outside `box`. Points then join while neighbours are within radius_mm, and,
+    with color_tol (0.08 works), while their colours stay close. The robot is not removed:
+    an object touching the gripper grows into it; cut it off with `box` or color_tol.
 
-    Returns a dict: points (N, 3) float32 and rgb (N, 3) uint8 of the object; n_points;
-    seed; centroid; aabb [[lo], [hi]]; size (aabb extent); top (centre of the aabb's top
-    face); top_z; bottom_z; obb {center, size, yaw_deg}: the smallest upright box, its size
-    [longer side, shorter side, height] and yaw (degrees about z, of the longer side, in
-    [-90, 90)); table_z; cameras. All of it describes the visible surface only.
+    Returns describe()'s dict plus seed and cameras. All of it describes the visible
+    surface only.
     """
     obs = observation(obs)
     obs.require(camera)
-    radius = float(radius_mm) / 1000.0
-    if not 0.002 <= radius <= 0.05:
-        raise ValueError("radius_mm must be in [2, 50]")
-    if color_tol is not None and not color_tol > 0:
-        raise ValueError("color_tol must be a positive number or None")
+    radius = _check(radius_mm, color_tol)
     cameras = _camera_list(obs, cameras)
     seed = pixel_point(obs, camera, u, v)
     xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box)
-    if table_z is None:
-        # The overview camera sees mostly table; a close wrist view may see mostly object.
-        overview = ["cam_high"] if "cam_high" in obs.cameras else cameras
-        table_z, _ = table_height(cloud(obs, overview, stride=2, max_depth=max_depth)[0])
+    table_z = _table_z(obs, cameras, max_depth) if table_z is None else float(table_z)
     if seed[2] <= table_z + table_margin_m:
         raise ValueError(f"The pixel hits the table (z {seed[2]:.4f} m, table {table_z:.4f} m); "
                          "pick a pixel inside the object")
@@ -274,28 +410,121 @@ def segment(obs, camera, u, v, *, radius_mm=11, color_tol=None, cameras=None, bo
     start = int(np.argmin(distance))
     if distance[start] > max(radius, 0.01):
         raise ValueError("The point under that pixel is outside `box` or `cameras`; pick another pixel")
-    centres, colours, inverse = _voxelize(points, rgb[index].astype(np.float64), min(VOXEL_M, 0.5 * radius))
-    pairs = cKDTree(centres).query_pairs(radius, output_type="ndarray")
-    if color_tol is not None and len(pairs):
-        feature = _color_feature(colours)
-        pairs = pairs[np.linalg.norm(feature[pairs[:, 0]] - feature[pairs[:, 1]], axis=1) < color_tol]
-    n = len(centres)
-    graph = coo_matrix((np.ones(len(pairs), dtype=np.int8), (pairs[:, 0], pairs[:, 1])), shape=(n, n))
-    labels = connected_components(graph, directed=False)[1]
-    member = labels[inverse] == labels[inverse[start]]
-    part, part_rgb = xyz[index[member]], rgb[index[member]]
-    if len(part) < MIN_SEGMENT_POINTS:
-        raise ValueError(f"Only {len(part)} points grew from that pixel; pick a pixel inside the object")
-    low, high = part.min(axis=0).astype(np.float64), part.max(axis=0).astype(np.float64)
-    return {
-        "points": part, "rgb": part_rgb, "n_points": int(len(part)),
-        "seed": seed.tolist(), "centroid": part.mean(axis=0, dtype=np.float64).tolist(),
-        "aabb": [low.tolist(), high.tolist()], "size": (high - low).tolist(),
-        "top": [float(0.5 * (low[0] + high[0])), float(0.5 * (low[1] + high[1])), float(high[2])],
-        "top_z": float(high[2]), "bottom_z": float(low[2]),
-        "obb": _obb(part.astype(np.float64)), "table_z": float(table_z),
-        "cameras": cameras,
-    }
+    labels, inverse, _, _, _ = _groups(points, rgb[index], radius, color_tol)
+    labels = labels[inverse]
+    member = index[labels == labels[start]]
+    if len(member) < MIN_SEGMENT_POINTS:
+        raise ValueError(f"Only {len(member)} points grew from that pixel; pick a pixel inside the object")
+    return {**describe(xyz[member], rgb[member], table_z=table_z), "seed": seed.tolist(), "cameras": cameras}
+
+
+def objects(obs, cameras=None, *, radius_mm=11, color_tol=None, box=None, table_z=None,
+            table_margin_m=0.005, min_points=50, include_robot=False, max_depth=2.0):
+    """Every object on the table, with no pixel to choose: what a controller uses to find
+    objects again in each new layout.
+
+    The cloud of `cameras` (default: all with depth) loses the table and what lies outside
+    `box`; the rest splits into parts that are not connected within radius_mm (with
+    color_tol, also at colour edges). A small fragment within 22 mm of a part at least four
+    times larger and of similar colour joins it (a thin edge or tab seen apart from its
+    body). Each part gets describe()'s dict plus:
+    robot: it reaches within 5 cm of a measured link6 position (an arm, or an object held
+    or touched by the gripper); supported: it rests on the table or on another part
+    (False: it floats, like a piece of an arm). Unless include_robot, robot and floating
+    parts and parts under min_points are left out. The list is sorted by footprint (obb
+    length x width), largest first, and `index` is the position in it; indices are not
+    kept from one call to the next, so choose objects by size, colour and position.
+    """
+    obs = observation(obs)
+    radius = _check(radius_mm, color_tol)
+    cameras = _camera_list(obs, cameras)
+    xyz, rgb, _ = cloud(obs, cameras, max_depth=max_depth, box=box)
+    table_z = _table_z(obs, cameras, max_depth) if table_z is None else float(table_z)
+    above = np.flatnonzero(xyz[:, 2] > table_z + table_margin_m)
+    if not len(above):
+        return []
+    labels, inverse, centres, colours, pairs = _groups(xyz[above].astype(np.float64), rgb[above],
+                                                       radius, color_tol)
+    labels = _absorb(labels, centres, colours, pairs)[inverse]
+    order = np.argsort(labels, kind="stable")
+    bounds = np.flatnonzero(np.diff(labels[order])) + 1
+    parts = [above[group] for group in np.split(order, bounds) if len(group) >= min_points]
+    found = []
+    for member in parts:
+        item = describe(xyz[member], rgb[member], table_z=table_z)
+        points = item["points"].astype(np.float64)
+        item["robot"] = bool(len(obs.eef)) and float(
+            np.min(np.linalg.norm(points[:, None, :] - obs.eef[None], axis=2))) < ROBOT_TOUCH_M
+        found.append(item)
+    for item in found:
+        bottom = item["bottom_z"]
+        item["supported"] = bottom <= table_z + FLOAT_M
+        if not item["supported"]:
+            # Something just beneath its lowest points holds it up (a stack, not an arm).
+            under = np.vstack([o["points"] for o in found if o is not item] or [np.zeros((0, 3))])
+            under = under[(under[:, 2] < bottom + 0.002) & (under[:, 2] > bottom - SUPPORT_GAP_M)]
+            rim = item["points"][item["points"][:, 2] < bottom + 0.01]
+            if len(under) and len(rim):
+                gap = cKDTree(under[:, :2]).query(rim[:, :2], distance_upper_bound=SUPPORT_GAP_M)[0]
+                item["supported"] = bool(np.isfinite(gap).any())
+    if not include_robot:
+        found = [item for item in found if item["supported"] and not item["robot"]]
+    found.sort(key=lambda item: -item["obb"]["size"][0] * item["obb"]["size"][1])
+    for index, item in enumerate(found):
+        item["index"] = index
+        item["cameras"] = cameras
+    return found
+
+
+def _box(item):
+    return item["obb"] if "obb" in item else item
+
+
+def flip(item):
+    """The same upright box turned by 180 degrees: its +x end becomes the other end.
+    Use it once you know which end of an object is which (see profile)."""
+    box = dict(_box(item))
+    box["yaw_deg"] = (box["yaw_deg"] + 360.0) % 360.0 - 180.0
+    return box
+
+
+def local(item, xyz):
+    """Points in an object's own frame: origin at its obb centre, x along the obb's yaw, y
+    to the left of x, z up. `item` is an obb or a dict that has one."""
+    box = _box(item)
+    a = math.radians(box["yaw_deg"])
+    d = np.asarray(xyz, dtype=np.float64).reshape(-1, 3) - np.asarray(box["center"], dtype=np.float64)
+    return np.stack([d[:, 0] * math.cos(a) + d[:, 1] * math.sin(a),
+                     -d[:, 0] * math.sin(a) + d[:, 1] * math.cos(a), d[:, 2]], axis=1)
+
+
+def world(item, offsets):
+    """Environment-frame points of offsets given in an object's own frame (see local)."""
+    box = _box(item)
+    a = math.radians(box["yaw_deg"])
+    o = np.asarray(offsets, dtype=np.float64).reshape(-1, 3)
+    return np.stack([o[:, 0] * math.cos(a) - o[:, 1] * math.sin(a),
+                     o[:, 0] * math.sin(a) + o[:, 1] * math.cos(a), o[:, 2]], axis=1) + \
+        np.asarray(box["center"], dtype=np.float64)
+
+
+def profile(item, bin_m=0.005):
+    """An object's shape along its obb's long axis, from the -x end to the +x end, in
+    slices about bin_m long: a list of {s (metres from the centre along +x), n (points),
+    width (extent across, metres), top_z}. Ends differ in width or height when the object
+    is not symmetric; slices longer than the feature at an end hide it."""
+    points = np.asarray(item["points"], dtype=np.float64)
+    coords = local(item, points)
+    half = item["obb"]["size"][0] / 2
+    edges = np.linspace(-half, half, max(2, int(round(2 * half / bin_m))) + 1)
+    slot = np.clip(np.searchsorted(edges, coords[:, 0], side="right") - 1, 0, len(edges) - 2)
+    rows = []
+    for k in range(len(edges) - 1):
+        inside = slot == k
+        rows.append({"s": float(0.5 * (edges[k] + edges[k + 1])), "n": int(inside.sum()),
+                     "width": float(np.ptp(coords[inside, 1])) if inside.any() else 0.0,
+                     "top_z": float(points[inside, 2].max()) if inside.any() else None})
+    return rows
 
 
 def project(obs, camera, xyz):
@@ -304,8 +533,8 @@ def project(obs, camera, xyz):
     obs = observation(obs)
     obs.require(camera)
     T = obs.T[camera]
-    world = np.asarray(xyz, dtype=np.float64).reshape(-1, 3) + obs.origin
-    usd = (world - T[:3, 3]) @ T[:3, :3]
+    world_xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3) + obs.origin
+    usd = (world_xyz - T[:3, 3]) @ T[:3, :3]
     cv = np.stack([usd[:, 0], -usd[:, 1], -usd[:, 2]], axis=1)
     z = cv[:, 2]
     pixels = cv @ obs.K[camera].T

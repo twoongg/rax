@@ -89,6 +89,10 @@ later session on this task with new layouts.
 {% endif %}
    Prefer simple motion functions and heuristics. Use
    [gemini](.agents/skills/gemini/SKILL.md) for visual and spatial perception.
+{% if robodojo and camera_geometry %}
+   Find objects again in every layout with `objects()` of
+   [point-cloud](.agents/skills/point-cloud/SKILL.md).
+{% endif %}
 {% if agent_formal %}
 3. **Practise with your controller.** Put the controller under
    `code/<project>/`. In each new episode, run it on the new layout, watch
