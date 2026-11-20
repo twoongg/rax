@@ -27,6 +27,8 @@ GEOMETRY_KEYS = frozenset({
     'cam_right_wrist_depth_m',
     # BEHAVIOR's head camera geometry.
     'camera_poses', 'camera_intrinsics', 'cam_head_depth_m',
+    # RoboDojo's robot body spheres, for removing the robot from depth points.
+    'robot_spheres',
 })
 
 
@@ -52,6 +54,9 @@ class ObservationProfile:
                 continue
             tool['description'] = tool.get('description', '').replace('RGB/depth', 'RGB').replace(
                 'attachments, calibration,', 'attachments (no depth or calibration),')
+            properties = tool.get('inputSchema', {}).get('properties', {})
+            for key in [key for key in properties if key in GEOMETRY_KEYS]:
+                del properties[key]
             result.append(tool)
         return result
 
