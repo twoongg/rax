@@ -146,6 +146,8 @@ def test_pose_math_tool_exposes_high_level_operations_without_episode():
         "relative_pose",
         "format_target",
         "extract_target",
+        "link6_from_tcp",
+        "tcp_from_link6",
     ]
     assert "does not require an episode" in tool["description"]
 

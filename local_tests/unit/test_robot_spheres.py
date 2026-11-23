@@ -79,6 +79,11 @@ TREE = [
 
 @pytest.fixture
 def urdf(tmp_path):
+    return write_arm_urdf(tmp_path)
+
+
+def write_arm_urdf(tmp_path):
+    """The test arm's URDF and meshes under tmp_path; returns the URDF path."""
     (tmp_path / "meshes").mkdir()
     links = []
     for name, (kind, params, xyz, rpy) in GEOMETRY.items():

@@ -195,6 +195,15 @@ class DualKinematics:
         value = self.manager.get_link_pose(robot, robot.base_link, is_relative=True)[0]
         return transform(value[:3], value[3:])
 
+    def limits(self, arm):
+        """(6, 2) arm joint limits in radians, the simulator's soft limits."""
+        robot = self.robots[arm]
+        key = self.manager.robot_key[self.manager.robot_list.index(robot)]
+        return np.asarray(
+            key.data.soft_joint_pos_limits[0, robot.arm_joint_indices].cpu().numpy(),
+            dtype=np.float64,
+        )
+
     def check(self):
         checks = {}
         for arm, robot in self.robots.items():
@@ -252,12 +261,8 @@ class DualKinematics:
         for arm in ("left", "right"):
             robot, target = self.robots[arm], targets[arm]
             validate_eef_target(target, require_gripper=True)
-            key = self.manager.robot_key[self.manager.robot_list.index(robot)]
-            limits = (
-                key.data.soft_joint_pos_limits[0, robot.arm_joint_indices].cpu().numpy()
-            )
             joints, diagnostics[arm] = self.fk[arm].bounded_target(
-                self.manager.get_joint(robot)[0], limits, self.root(arm), target
+                self.manager.get_joint(robot)[0], self.limits(arm), self.root(arm), target
             )
             opening = target.get("gripper_opening", float(not target["gripper_closed"]))
             action.extend([*joints.tolist(), opening])

@@ -70,6 +70,9 @@ from the commanded opening.
 
 ## Related skills
 
+- [grasp-planning](../grasp-planning/SKILL.md) before grasping, carrying, turning or placing an object:
+  where the gripper holds relative to link6, the joint limits, checking every pose of a
+  plan with `robodojo_ik`, and whether a close took the object.
 - [pose-math](../pose-math/SKILL.md) for pose composition, frame changes and target
   formatting. If the tool fails, do not improvise a replacement conversion; an
   already valid absolute target can still be used.
