@@ -39,6 +39,11 @@ one episode's actions.
 
 - Hard-code reusable motion functions and decision rules using MCP calls,
   including `{{ robot.plan }}`, when suitable.
+{% if robodojo and camera_geometry %}
+- Find objects again in every layout from depth with `objects()` of
+  [point-cloud](../point-cloud/SKILL.md). It needs no chosen pixel, and gives each
+  object's centre, footprint, top height and yaw.
+{% endif %}
 - Use Gemini when simple perception rules are insufficient. Write your own
   prompts and response-processing code; see the [gemini skill](../gemini/SKILL.md).
 - Practise and debug functions within the same exploration episode, using direct
