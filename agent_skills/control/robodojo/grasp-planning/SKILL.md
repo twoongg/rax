@@ -49,21 +49,18 @@ suit the place as well as the pick.
    - While the object is held, it moves with link6. To get the link6 pose that puts the
      object at its place pose, use `relative_pose` from the object's pose to the grasp
      pose, then `compose_pose` of that delta on the object's place pose (`local` both times).
-2. Send every pose of several candidates in one `robodojo_ik` call (up to 256 poses).
-   Candidates can differ in grasp tilt, finger direction, grasp point and arm.
-3. Keep a candidate only if every pose passes all of these:
-   - it is `reachable`;
-   - `limit_margin_rad` is at least about 0.1;
-   - `other_arm_clearance_m` is at least 2 cm;
-   - `lowest_z_m` is above the table top.
-
-   `check_plan` in `grasp.py` applies these rules.
+2. Send every pose of several candidates in one `robodojo_ik` call (up to 256 poses),
+   with `table_z_m`, the table top's height. Candidates can differ in grasp tilt, finger
+   direction, grasp point and arm.
+3. Keep a candidate only if every pose has `ok`. A pose is ok when it is reachable, at
+   least 0.1 rad from every joint limit, at least 2 cm from the other arm, and the arm
+   stays above the table top. `why` names what fails.
 4. If no candidate passes, change the plan: use the other arm, set the object down turned
    and grasp it again, or hand it to the other arm.
 
-`robodojo_ik` sees only the robot, not objects or the table. `robodojo_free_space_move`
-plans its own path and may end in other joint angles, so check the measured pose after
-each move.
+`robodojo_ik` sees only the robot and the table height, not objects. An ok pose can still
+fail to plan: `robodojo_free_space_move` plans its own path and may end in other joint
+angles, so preview the move and check the measured pose after each move.
 {% if camera_geometry %}
 
 With `robot_spheres: true` (at most 16 poses), each solution carries its body spheres.
@@ -103,9 +100,9 @@ mkdir -p code/<project> && cp .agents/skills/grasp-planning/grasp.py code/<proje
 import sys
 sys.path.insert(0, "code/<project>")
 {% if camera_geometry %}
-from grasp import hand, link6_target, check_plan, grip, verify, arm_hits
+from grasp import hand, link6_target, grip, verify, arm_hits
 {% else %}
-from grasp import hand, link6_target, check_plan, grip
+from grasp import hand, link6_target, grip
 {% endif %}
 ```
 
@@ -120,7 +117,6 @@ A controller imports it the same way; the registered bundle carries it.
 | `hand(reply, arm)` | the measured `tcp`, `approach`, `closing`, `opening` and `gap_m` |
 | `link6_target(tcp, approach, closing=None)` | a link6 `{"position", "quaternion_wxyz"}`, the same as `link6_from_tcp` |
 | `tcp_of(target)` | `(tcp, approach, closing)` of a link6 pose |
-| `check_plan(ik_reply, table_z=None)` | one `{"ok", "why", ...}` row per `robodojo_ik` target |
 | `grip(reply, arm, width_m=None)` | `state`: `empty`, `stayed_open` or `holding`, with the reason |
 {% if camera_geometry %}
 | `verify(reply, arm, width_m=None)` | `grip` plus `wrist_points` between the pads: `ok` and the reason |

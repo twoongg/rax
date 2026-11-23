@@ -21,7 +21,7 @@ from services.robodojo import robot_spheres as rs
 from services.robodojo.arm_ik import ArmIK
 from services.robodojo.kinematics import ArmFK, pose as pose_dict
 from services.robodojo.session import (
-    MAX_IK_SOLUTIONS, MAX_IK_SPHERE_TARGETS, MAX_IK_TARGETS, RoboDojoSession,
+    MAX_IK_SOLUTIONS, MAX_IK_SPHERE_TARGETS, MAX_IK_TARGETS, RoboDojoSession, ik_problems,
 )
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -157,14 +157,15 @@ def test_ik_ranks_distinct_solutions_nearest_the_seed_first(urdf):
 
 # ---------------------------------------------------------------- the session's ik op
 
-def _session(urdf, left=(0.3, 0.5, 0.4, 0.0, 0.2, 0.0), right=(-0.3, 0.5, 0.4, 0.0, 0.2, 0.0)):
+def _session(urdf, left=(0.3, 0.5, 0.4, 0.0, 0.2, 0.0), right=(-0.3, 0.5, 0.4, 0.0, 0.2, 0.0),
+             sim_limits=LIMITS):
     robot = SimpleNamespace(urdf_path=str(urdf), arm_joints_name=list(JOINTS),
                             base_link="base_link", ee_link_name="link6")
     session = RoboDojoSession.__new__(RoboDojoSession)
     session.kinematics = SimpleNamespace(
         robots={"left": robot, "right": robot},
         fk={arm: ArmFK(urdf, JOINTS, "base_link", "link6") for arm in ROOTS},
-        root=lambda arm: ROOTS[arm], limits=lambda arm: LIMITS.copy())
+        root=lambda arm: ROOTS[arm], limits=lambda arm: np.array(sim_limits, dtype=float))
     state = np.zeros(14, dtype=np.float32)
     state[:6], state[7:13] = left, right
     session.obs = {"states": state}
@@ -183,10 +184,13 @@ def test_session_ik_answers_in_the_environment_frame_with_limits_and_clearances(
         "position": [3.0, 0.0, 0.0], "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0]}])
     assert reply["arm"] == "left" and reply["step_id"] == 9 and reply["physical_steps"] == 0
     assert reply["joint_limits_rad"] == np.round(LIMITS, 4).tolist()
-    assert reply["reachable_count"] == 1
+    assert reply["reachable_count"] == 1 and reply["ok_count"] == 1
     first, second = reply["results"]
     assert first["reachable"] and not second["reachable"]
+    assert first["ok"] and first["why"] == "ok"
+    assert not second["ok"] and second["why"].startswith("unreachable")
     best = first["solutions"][0]
+    assert best["ok"] and best["why"] == "ok"
     assert "robot_spheres" not in best
     model = rs.ArmSpheres(str(urdf), JOINTS, "base_link", "link6")
     centres, radii = model.world(ROOTS["left"], np.asarray(best["joints"]))
@@ -196,6 +200,62 @@ def test_session_ik_answers_in_the_environment_frame_with_limits_and_clearances(
     other, other_r = model.world(ROOTS["right"], np.array([-0.3, 0.5, 0.4, 0.0, 0.2, 0.0]))
     gap = (np.linalg.norm(centres[:, None] - other[None], axis=2) - radii[:, None] - other_r[None]).min()
     assert math.isclose(best["other_arm_clearance_m"], gap, abs_tol=1e-4)
+
+
+def test_session_ik_keeps_to_the_urdf_limits_where_the_simulator_allows_more(urdf):
+    # RoboDojo's simulator reports about +-10 rad for most X5A joints; the URDF holds the
+    # arm's real range, so IK must not plan past it.
+    loose = np.array([[-10.0, 10.0]] * 5 + [[-3.14, 3.14]])
+    session = _session(urdf, sim_limits=loose)
+    q = np.array([0.2, 0.9, 0.8, 0.1, 0.5, 0.3])
+    reply = session.ik("left", [_target(urdf, "left", q)], max_solutions=4)
+    assert reply["joint_limits_rad"] == np.round(LIMITS, 4).tolist()
+    for solution in reply["results"][0]["solutions"]:
+        joints = np.asarray(solution["joints"])
+        assert ((joints >= LIMITS[:, 0] - 1e-9) & (joints <= LIMITS[:, 1] + 1e-9)).all()
+        margin = np.minimum(joints - LIMITS[:, 0], LIMITS[:, 1] - joints).min()
+        assert math.isclose(solution["limit_margin_rad"], margin, abs_tol=1e-4)
+    # A simulator limit tighter than the URDF's still applies.
+    tight = LIMITS.copy()
+    tight[5] = (-0.5, 0.5)
+    reply = _session(urdf, sim_limits=tight).ik("left", [_target(urdf, "left", q)])
+    assert reply["joint_limits_rad"][5] == [-0.5, 0.5]
+
+
+def test_session_ik_puts_ok_solutions_first_and_checks_the_table(urdf):
+    session = _session(urdf)
+    # joint5 at zero lines joint4 up with joint6, so the pose has many joint solutions; the
+    # seed's own one is 0.05 rad from joint6's limit and is not ok.
+    q = np.array([0.2, 0.9, 0.8, 0.0, 0.0, 1.65])
+    reply = session.ik("left", [_target(urdf, "left", q)], seed_joints=q.tolist(),
+                       max_solutions=4)
+    result = reply["results"][0]
+    solutions = result["solutions"]
+    assert result["reachable"] and result["ok"] and solutions[0]["ok"]
+    assert [s["ok"] for s in solutions] == sorted((s["ok"] for s in solutions), reverse=True)
+    seed_own = next(s for s in solutions if s["distance_from_seed_rad"] < 1e-3)
+    assert not seed_own["ok"] and "joint limit" in seed_own["why"]
+
+    target = _target(urdf, "left", np.array([0.2, 0.9, 0.8, 0.1, 0.5, 0.3]))
+    low = session.ik("left", [target], table_z_m=-5.0)
+    assert low["results"][0]["ok"] and low["checks"]["table_z_m"] == -5.0
+    high = session.ik("left", [target], table_z_m=5.0)
+    assert not high["results"][0]["ok"] and "table top" in high["results"][0]["why"]
+    assert high["ok_count"] == 0
+    for bad in ("0.7", True, float("nan")):
+        with pytest.raises(ValueError, match="table_z_m"):
+            session.ik("left", [target], table_z_m=bad)
+
+
+def test_ik_problems_names_what_is_wrong_with_each_solution():
+    base = {"position_error_mm": 0.1, "rotation_error_deg": 0.0, "limit_margin_rad": 0.5,
+            "lowest_z_m": 0.1, "other_arm_clearance_m": 0.1}
+    assert ik_problems(base, True, table_z_m=0.0) == []
+    assert "unreachable" in ik_problems(dict(base, position_error_mm=40.0), False)[0]
+    assert "joint limit" in ik_problems(dict(base, limit_margin_rad=0.02), True)[0]
+    assert "other arm" in ik_problems(dict(base, other_arm_clearance_m=0.005), True)[0]
+    assert "table top" in ik_problems(dict(base, lowest_z_m=0.003), True, table_z_m=0.0)[0]
+    assert ik_problems(dict(base, lowest_z_m=-0.01), True) == []  # No table_z_m: not judged.
 
 
 def test_session_ik_returns_spheres_only_when_asked_and_checks_its_arguments(urdf):
@@ -307,26 +367,6 @@ def test_hand_and_grip_read_the_measured_gripper():
     assert far["state"] == "holding" and "60 mm wide" in far["why"]
     near = grasp.grip(packet, "left", width_m=0.036)
     assert "wide" not in near["why"]
-
-
-def test_check_plan_names_what_is_wrong_with_each_pose():
-    def solution(**kw):
-        base = {"joints": [0.0] * 6, "position_error_mm": 0.1, "rotation_error_deg": 0.0,
-                "limit_margin_rad": 0.5, "lowest_z_m": 0.1, "other_arm_clearance_m": 0.1}
-        return dict(base, **kw)
-
-    reply = {"results": [
-        {"reachable": True, "solutions": [solution()]},
-        {"reachable": False, "solutions": [solution(position_error_mm=40.0)]},
-        {"reachable": True, "solutions": [solution(limit_margin_rad=0.02)]},
-        {"reachable": True, "solutions": [solution(other_arm_clearance_m=0.005)]},
-        {"reachable": True, "solutions": [solution(lowest_z_m=-0.01)]},
-    ]}
-    rows = grasp.check_plan(_reply(reply), table_z=0.0)
-    assert [row["ok"] for row in rows] == [True, False, False, False, False]
-    assert "unreachable" in rows[1]["why"] and "joint limit" in rows[2]["why"]
-    assert "other arm" in rows[3]["why"] and "below the table" in rows[4]["why"]
-    assert grasp.check_plan(reply)[4]["ok"]  # Without table_z, height is not judged.
 
 
 def test_arm_hits_counts_points_inside_the_spheres():

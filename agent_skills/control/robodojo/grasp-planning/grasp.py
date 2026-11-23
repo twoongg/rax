@@ -1,16 +1,16 @@
-"""Grasping with the dual ARX X5: where the gripper holds, reading a close, checking a plan.
+"""Grasping with the dual ARX X5: where the gripper holds and reading a close.
 
 Uses only robot tool replies (the measured link6 poses and gripper openings,
 `robodojo_ik` results and, with depth, the wrist camera's depth image). Every position
 is in the environment frame (metres) that robot commands use.
 
-    from grasp import hand, link6_target, check_plan, grip
+    from grasp import hand, link6_target, grip
 
     reply = ctx.call("robodojo_observe")
     print(hand(reply, "left"))                       # TCP, approach and closing axes, gap
     grasp = link6_target([0.30, 0.10, 0.02], approach=[0, 0, -1], closing=[0, 1, 0])
-    plan = ctx.call("robodojo_ik", arm="left", targets=[grasp])
-    print(check_plan(plan, table_z=0.0))
+    plan = ctx.call("robodojo_ik", arm="left", targets=[grasp], table_z_m=0.0)
+    # Each of plan's "results" has "ok" and "why".
 
 The gripper's tool centre point (TCP), axes and dimensions are those of the `hand`,
 `top_down`/`pose_from_axes` and `verify_grasp`/`fingers_view` calls of AMP's robot SDK
@@ -158,33 +158,6 @@ def verify(reply, arm, *, width_m=None, min_points=15):
     why = g["why"] + ("; closed past the object with nothing between the pads" if overclosed else "")
     return {"ok": ok, "why": why, "state": g["state"], "opening": g["opening"],
             "gap_m": g["gap_m"], "wrist_points": points}
-
-
-def check_plan(ik_reply, *, table_z=None, min_margin=0.1, min_clearance=0.02, above_table=0.005):
-    """One row per robodojo_ik target: {"ok", "why", "margin", "lowest_z", "clearance"}.
-    A target fails when unreachable, within min_margin rad of a joint limit, closer than
-    min_clearance to the other arm, or (with table_z) reaching below table_z + above_table.
-    The arm's spheres cover the fingers over their whole stroke, so lowest_z and clearance
-    are conservative by up to about 2 cm near the gripper."""
-    rows = []
-    for result in _packet(ik_reply)["results"]:
-        if not result["solutions"]:
-            rows.append({"ok": False, "why": "no solution", "margin": None,
-                         "lowest_z": None, "clearance": None})
-            continue
-        s = result["solutions"][0]
-        why = []
-        if not result["reachable"]:
-            why.append(f"unreachable ({s['position_error_mm']:.0f} mm, {s['rotation_error_deg']:.0f} deg off)")
-        if s["limit_margin_rad"] < min_margin:
-            why.append(f"{s['limit_margin_rad']:.2f} rad from a joint limit")
-        if s["other_arm_clearance_m"] < min_clearance:
-            why.append(f"{s['other_arm_clearance_m'] * 100:.1f} cm from the other arm")
-        if table_z is not None and s["lowest_z_m"] < table_z + above_table:
-            why.append(f"reaches {(table_z - s['lowest_z_m']) * 100:.1f} cm below the table top")
-        rows.append({"ok": not why, "why": "; ".join(why) or "ok", "margin": s["limit_margin_rad"],
-                     "lowest_z": s["lowest_z_m"], "clearance": s["other_arm_clearance_m"]})
-    return rows
 
 
 def arm_hits(spheres, xyz, *, margin_m=0.0):

@@ -32,6 +32,26 @@ ARM_OFFSETS = {"left": 0, "right": 7}
 MAX_IK_TARGETS = 256
 MAX_IK_SOLUTIONS = 8
 MAX_IK_SPHERE_TARGETS = 16
+# A robodojo_ik solution is ok when it is accurate and keeps these margins (AMP's grasp checks).
+IK_MIN_LIMIT_MARGIN_RAD = 0.1
+IK_MIN_OTHER_ARM_CLEARANCE_M = 0.02
+IK_ABOVE_TABLE_M = 0.005
+
+
+def ik_problems(row, accurate, table_z_m=None):
+    """What keeps one robodojo_ik solution row from being ok; empty when it is ok."""
+    problems = []
+    if not accurate:
+        problems.append(f"unreachable ({row['position_error_mm']:.0f} mm, "
+                        f"{row['rotation_error_deg']:.0f} deg off)")
+    if row["limit_margin_rad"] < IK_MIN_LIMIT_MARGIN_RAD:
+        problems.append(f"{row['limit_margin_rad']:.2f} rad from a joint limit")
+    if row["other_arm_clearance_m"] < IK_MIN_OTHER_ARM_CLEARANCE_M:
+        problems.append(f"{row['other_arm_clearance_m'] * 100:.1f} cm from the other arm")
+    if table_z_m is not None and row["lowest_z_m"] < table_z_m + IK_ABOVE_TABLE_M:
+        problems.append(f"the arm reaches {(row['lowest_z_m'] - table_z_m) * 100:+.1f} cm "
+                        "from the table top")
+    return problems
 
 
 def register_native_evaluation(env):
@@ -427,11 +447,31 @@ class RoboDojoSession:
                 return index + 1
         return len(model.path)
 
-    def ik(self, arm, targets, seed_joints=None, max_solutions=1, robot_spheres=False):
+    def _ik_limits(self, arm, model):
+        """(6, 2) joint limits for IK: the arm URDF's, tightened by the simulator's.
+
+        The simulator's soft limits can be far wider than the arm turns (about ±10 rad on
+        RoboDojo's X5A), while the URDF holds its real range (AMP's X5 limits), so IK keeps
+        to both."""
+        limits = np.array(self.kinematics.limits(arm), dtype=np.float64).reshape(-1, 2)
+        urdf = {joint["name"]: joint["limits"] for joint in model.path_joints
+                if joint["kind"] != "fixed"}
+        for index, name in enumerate(model.joint_names):
+            low, high = urdf.get(name, (0.0, 0.0))
+            if low < high:
+                limits[index] = max(limits[index, 0], low), min(limits[index, 1], high)
+        return limits
+
+    def ik(self, arm, targets, seed_joints=None, max_solutions=1, robot_spheres=False,
+           table_z_m=None):
         """Link6 IK for many targets of one arm; robot-only, no step. Each solution says how
         accurate it is, how far its joints keep from their limits, how low the moving arm
-        reaches and how close it comes to the other arm at its measured joints."""
+        reaches, how close it comes to the other arm at its measured joints, and whether
+        that is ok (``ik_problems``). Solutions that are ok come first."""
         require(arm in ARM_OFFSETS, "arm must be left or right")
+        require(table_z_m is None or (
+            isinstance(table_z_m, (int, float)) and not isinstance(table_z_m, bool)
+            and np.isfinite(table_z_m)), "table_z_m must be a finite number")
         require(isinstance(targets, (list, tuple)) and 1 <= len(targets) <= MAX_IK_TARGETS,
                 f"targets must be a list of 1..{MAX_IK_TARGETS} link6 poses")
         require(type(max_solutions) is int and 1 <= max_solutions <= MAX_IK_SOLUTIONS,
@@ -460,7 +500,7 @@ class RoboDojoSession:
                 raise ValueError(f"targets[{index}]: {exc}") from None
             goals.append(to_base @ transform(target["position"], target["quaternion_wxyz"]))
         model = self._arm_model(arm, measured)
-        limits = self.kinematics.limits(arm)
+        limits = self._ik_limits(arm, model)
         solver = ArmIK(model.path_joints, model.joint_names, limits)
         found = solver.solve(np.stack(goals), seed, max_solutions)
 
@@ -487,10 +527,15 @@ class RoboDojoSession:
                     "lowest_z_m": round(float((centres[moving, 2] - radii[moving]).min()), 4),
                     "other_arm_clearance_m": round(float(gaps.min()), 4),
                 }
+                problems = ik_problems(row, solution["accurate"], table_z_m)
+                row = {"ok": not problems, "why": "; ".join(problems) or "ok", **row}
                 if robot_spheres:
                     row["robot_spheres"] = self._sphere_rows(centres, radii).tolist()
                 rows.append(row)
+            rows.sort(key=lambda item: not item["ok"])
             results.append({"reachable": bool(solutions and solutions[0]["accurate"]),
+                            "ok": bool(rows and rows[0]["ok"]),
+                            "why": rows[0]["why"] if rows else "no solution",
                             "solutions": rows})
         return {
             "arm": arm,
@@ -500,15 +545,24 @@ class RoboDojoSession:
             "seed_joints": np.round(seed, 5).tolist(),
             "joint_limits_rad": np.round(limits, 4).tolist(),
             "reachable_count": sum(item["reachable"] for item in results),
+            "ok_count": sum(item["ok"] for item in results),
             "results": results,
             "tolerances": {"position_mm": POSITION_TOLERANCE_MM,
                            "rotation_deg": ROTATION_TOLERANCE_DEG},
+            "checks": {"min_limit_margin_rad": IK_MIN_LIMIT_MARGIN_RAD,
+                       "min_other_arm_clearance_m": IK_MIN_OTHER_ARM_CLEARANCE_M,
+                       "table_z_m": table_z_m, "above_table_m": IK_ABOVE_TABLE_M},
             "notes": (
-                "Robot-only: no task objects. Solutions are link6 joint angles, accurate ones "
-                "nearest the seed first. lowest_z_m is the lowest point of the arm's moving "
-                "links and fingers; other_arm_clearance_m is against the other arm at its "
-                "measured joints. Finger spheres cover their whole stroke, so both are "
-                "conservative near the gripper by up to about 2 cm."
+                "Robot-only: no task objects. Solutions are link6 joint angles: ok ones first, "
+                "then accurate ones nearest the seed. ok means reachable, at least "
+                f"{IK_MIN_LIMIT_MARGIN_RAD} rad from every joint limit, at least "
+                f"{IK_MIN_OTHER_ARM_CLEARANCE_M * 100:.0f} cm from the other arm and, with "
+                "table_z_m, above the table top; why names what fails. Joint limits are the "
+                "arm URDF's, tightened by the simulator's. lowest_z_m is the lowest point of "
+                "the arm's moving links and fingers; other_arm_clearance_m is against the "
+                "other arm at its measured joints. Finger spheres cover their whole stroke, "
+                "so both are conservative near the gripper by up to about 2 cm. An ok pose "
+                "can still fail to plan: robodojo_free_space_move plans its own path."
             ),
             "physical_steps": 0,
         }
