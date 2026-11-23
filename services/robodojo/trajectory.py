@@ -32,6 +32,8 @@ def policy_actions(
 
     Native take_action owns interpolation and zero velocity targets. The
     inactive arm holds its initial target; gripper opening follows elapsed time.
+    initial_state holds the measured arm joints and each gripper's last command,
+    not its measured opening, which on a held object would loosen the grip.
     """
     positions = np.asarray(positions, dtype=np.float32)
     initial_state = np.asarray(initial_state, dtype=np.float32)

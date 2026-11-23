@@ -114,8 +114,8 @@ Inputs: complete `pose`, `target_kind`, and gripper fields.
 - `target_kind: "step_eef"` requires `gripper_closed`; optional
   `gripper_opening` is continuous in `[0,1]` and overrides the boolean fallback.
 - `target_kind: "free_space_move"` omits `gripper_closed`; optional
-  `gripper_opening` remains continuous. If omitted, execution holds the
-  measured opening from the plan's start state.
+  `gripper_opening` remains continuous. If omitted, execution keeps the arm's
+  last commanded opening.
 
 It emits only the exact target keys accepted by the selected motion tool:
 `position` in environment-origin metres and unit `quaternion_wxyz` for `link6`.

@@ -57,6 +57,7 @@ def _session(tmp_path, limit=100):
     session.metadata = {"control_frequency_hz": 25, "control_dt": 0.04, "physics_dt": 0.004,
                         "inner_control_ticks_per_observation": 10, "free_space_world_model": {}}
     session.obs = {"states": np.zeros(14, dtype=np.float32)}
+    session._commanded_grippers = None
     submitted = []
 
     def take_action(command):
@@ -157,6 +158,57 @@ def test_single_mode_flag_defaults_to_native_execution(tmp_path, preview_only):
     assert len(result["trajectory_preview"]["actions"]) == 2
     assert result["timing"]["fits_remaining_budget"]
     assert result["timing"]["remaining_episode_steps"] == 93
+
+
+def _close_left_on_object(session, measured_opening=0.56):
+    """Command the left gripper shut; an object stops the fingers at measured_opening."""
+    close = np.zeros((1, 14), dtype=np.float32)
+    close[0, 13] = 1.0  # Right gripper open.
+    session.chunk_step(close)
+    session.obs["states"][6] = measured_opening
+
+
+def _planner(session):
+    planner = SimpleNamespace(plan_path=lambda *args, **kwargs: {
+        "status": "Success", "position": np.zeros((21, 6)), "interpolation_dt": 0.004})
+    session._ensure_curobo_planner = lambda arm: (SimpleNamespace(entity_origin_pose=None), planner)
+
+
+@pytest.mark.parametrize("arm", ["left", "right"])
+def test_free_space_move_keeps_commanded_grip_on_a_held_object(tmp_path, arm):
+    # Holding back the measured opening (0.56) would end the squeeze and drop the object.
+    session, submitted = _session(tmp_path)
+    _close_left_on_object(session)
+    _planner(session)
+    result = session.free_space_move(
+        arm=arm, target={"position": [0, 0, 0], "quaternion_wxyz": [1, 0, 0, 0]})
+    assert result["executed"]
+    moves = submitted[1:]
+    assert len(moves) == 2
+    for command in moves:
+        assert command["left_ee_joint_state"][0] == 0.0
+        assert command["right_ee_joint_state"][0] == 1.0
+
+
+def test_free_space_move_opening_starts_from_the_commanded_grip(tmp_path):
+    session, submitted = _session(tmp_path)
+    _close_left_on_object(session)
+    _planner(session)
+    session.free_space_move(arm="left", target={
+        "position": [0, 0, 0], "quaternion_wxyz": [1, 0, 0, 0], "gripper_opening": 1.0})
+    np.testing.assert_allclose(
+        [command["left_ee_joint_state"][0] for command in submitted[1:]], [0.5, 1.0])
+
+
+def test_free_space_move_holds_the_measured_opening_before_any_command(tmp_path):
+    session, submitted = _session(tmp_path)
+    session.obs["states"][[6, 13]] = [0.3, 0.8]
+    _planner(session)
+    session.free_space_move(
+        arm="left", target={"position": [0, 0, 0], "quaternion_wxyz": [1, 0, 0, 0]})
+    for command in submitted:
+        np.testing.assert_allclose(command["left_ee_joint_state"], [0.3])
+        np.testing.assert_allclose(command["right_ee_joint_state"], [0.8])
 
 
 def test_failed_plan_exposes_stage_reason_and_diagnostics_without_execution(tmp_path):
