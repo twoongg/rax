@@ -101,6 +101,10 @@ Use these skills as needed rather than loading every reference up front:
 - [Object localization](../object-localization/SKILL.md) to locate visible object
   points from the current images.
 {% endif %}
+{% if robodojo %}
+- [Grasp planning](../grasp-planning/SKILL.md) before grasping, turning or placing an object: where the
+  gripper holds, and checking every pose of the plan with `robodojo_ik` before moving.
+{% endif %}
 - [Wrist-camera inspection](../wrist-camera-inspection/SKILL.md) to obtain a
   clearer close-up with an empty arm when the {{ robot.overview }} view is
   insufficient; a close wrist view gives more detail than cropping `{{ robot.overview_camera }}`.

@@ -49,6 +49,10 @@ The skill links below are entry points; read only what the next step needs.
   centre, footprint, top height and yaw.
 {% endif %}
 - [free-space-move](.agents/skills/free-space-move/SKILL.md) for moving a hand to a pose.
+{% if robodojo %}
+- [grasp-planning](.agents/skills/grasp-planning/SKILL.md) for where the gripper holds and checking a
+  grasp plan's poses with `robodojo_ik`.
+{% endif %}
 - [gemini](.agents/skills/gemini/SKILL.md) for visual and spatial perception.
 
 ## How the episode ends

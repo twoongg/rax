@@ -15,7 +15,7 @@ DEFAULT = 'robodojo'  # Saved configurations and manifests without a benchmark f
 ROBODOJO_TOOLS = frozenset({
     'robodojo_status', 'robodojo_observe', 'robodojo_pixel_to_position',
     'robodojo_pose_math', 'robodojo_step', 'robodojo_step_eef',
-    'robodojo_free_space_move', 'robodojo_execute_motion_plan', 'robodojo_fk_preview',
+    'robodojo_free_space_move', 'robodojo_execute_motion_plan', 'robodojo_fk_preview', 'robodojo_ik',
     'robot_preview_describe', 'robot_preview_run',
 })
 BEHAVIOR_TOOLS = frozenset({

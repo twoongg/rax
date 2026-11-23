@@ -16,6 +16,7 @@ from scipy.spatial.transform import Rotation
 
 from .camera_calibration import rendered_intrinsics
 from services.simulator.io import RejectedBeforeAction, action_execution_scope, reject_unless, require, write_json
+from .arm_ik import POSITION_TOLERANCE_MM, ROTATION_TOLERANCE_DEG, ArmIK
 from .kinematics import DualKinematics, measured_joint_state, transform, validate_eef_target
 from .robot_spheres import arm_spheres
 from .trajectory import (
@@ -27,6 +28,10 @@ from .trajectory import (
 )
 
 CAMERAS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
+ARM_OFFSETS = {"left": 0, "right": 7}
+MAX_IK_TARGETS = 256
+MAX_IK_SOLUTIONS = 8
+MAX_IK_SPHERE_TARGETS = 16
 
 
 def register_native_evaluation(env):
@@ -373,25 +378,34 @@ class RoboDojoSession:
         require(planner is not None, f"No cuRobo planner available for {arm}")
         return robot, planner
 
+    def _arm_model(self, arm, joints):
+        """The arm's sphere model, checked against the arm FK at joints."""
+        robot = self.kinematics.robots[arm]
+        model = arm_spheres(
+            str(robot.urdf_path), tuple(robot.arm_joints_name),
+            robot.base_link, robot.ee_link_name,
+        )
+        require(
+            np.allclose(model.frames(joints)[-1], self.kinematics.fk[arm].matrix(joints),
+                        atol=1e-6),
+            f"Sphere model and arm FK disagree for {arm}",
+        )
+        return model
+
+    @staticmethod
+    def _sphere_rows(centres, radii):
+        # Millimetres, radii rounded up so that every sphere still holds its points.
+        return np.c_[np.round(centres, 3), np.ceil(radii * 1000.0) / 1000.0]
+
     def robot_spheres(self):
         """The robot's body spheres at the observed joints, in the environment frame."""
         state = self._motion_state()
         spheres, counts = [], {}
-        for arm, offset in (("left", 0), ("right", 7)):
-            robot = self.kinematics.robots[arm]
-            model = arm_spheres(
-                str(robot.urdf_path), tuple(robot.arm_joints_name),
-                robot.base_link, robot.ee_link_name,
-            )
+        for arm, offset in ARM_OFFSETS.items():
             joints = state[offset:offset + 6].astype(np.float64)
-            require(
-                np.allclose(model.frames(joints)[-1], self.kinematics.fk[arm].matrix(joints),
-                            atol=1e-6),
-                f"Sphere model and arm FK disagree for {arm}",
-            )
+            model = self._arm_model(arm, joints)
             centres, radii = model.world(self.kinematics.root(arm), joints)
-            # Millimetres, radii rounded up so that every sphere still holds its points.
-            spheres.append(np.c_[np.round(centres, 3), np.ceil(radii * 1000.0) / 1000.0])
+            spheres.append(self._sphere_rows(centres, radii))
             counts[arm] = len(radii)
         return {
             "step_id": int(self.step_id),
@@ -399,6 +413,104 @@ class RoboDojoSession:
             "spheres_m": np.vstack(spheres).tolist(),
             "counts": counts,
             "source": "robot URDF meshes at the measured joints; fingers cover their full stroke",
+        }
+
+    @staticmethod
+    def _height_fixed_frames(model, root):
+        """Path frames below the first joint that can change the height of what it carries."""
+        frames = root @ model.frames(np.zeros(len(model.joint_names)))
+        for index, joint in enumerate(model.path_joints):
+            if joint["kind"] == "fixed":
+                continue
+            axis = (frames[index] @ joint["origin"])[:3, :3] @ joint["axis"]
+            if abs(axis[2]) < 0.99 * np.linalg.norm(axis):
+                return index + 1
+        return len(model.path)
+
+    def ik(self, arm, targets, seed_joints=None, max_solutions=1, robot_spheres=False):
+        """Link6 IK for many targets of one arm; robot-only, no step. Each solution says how
+        accurate it is, how far its joints keep from their limits, how low the moving arm
+        reaches and how close it comes to the other arm at its measured joints."""
+        require(arm in ARM_OFFSETS, "arm must be left or right")
+        require(isinstance(targets, (list, tuple)) and 1 <= len(targets) <= MAX_IK_TARGETS,
+                f"targets must be a list of 1..{MAX_IK_TARGETS} link6 poses")
+        require(type(max_solutions) is int and 1 <= max_solutions <= MAX_IK_SOLUTIONS,
+                f"max_solutions must be an integer in 1..{MAX_IK_SOLUTIONS}")
+        require(type(robot_spheres) is bool, "robot_spheres must be a boolean")
+        require(len(targets) * max_solutions <= MAX_IK_TARGETS,
+                f"targets times max_solutions must be at most {MAX_IK_TARGETS}")
+        require(not robot_spheres or len(targets) <= MAX_IK_SPHERE_TARGETS,
+                f"robot_spheres needs at most {MAX_IK_SPHERE_TARGETS} targets")
+        state = self._motion_state()
+        offset = ARM_OFFSETS[arm]
+        measured = state[offset:offset + 6].astype(np.float64)
+        if seed_joints is None:
+            seed = measured
+        else:
+            seed = np.asarray(seed_joints, dtype=np.float64)
+            require(seed.shape == (6,) and np.isfinite(seed).all(),
+                    "seed_joints must be six finite joint angles")
+        root = self.kinematics.root(arm)
+        to_base = np.linalg.inv(root)
+        goals = []
+        for index, target in enumerate(targets):
+            try:
+                validate_eef_target(target)
+            except ValueError as exc:
+                raise ValueError(f"targets[{index}]: {exc}") from None
+            goals.append(to_base @ transform(target["position"], target["quaternion_wxyz"]))
+        model = self._arm_model(arm, measured)
+        limits = self.kinematics.limits(arm)
+        solver = ArmIK(model.path_joints, model.joint_names, limits)
+        found = solver.solve(np.stack(goals), seed, max_solutions)
+
+        other = "right" if arm == "left" else "left"
+        other_joints = state[ARM_OFFSETS[other]:ARM_OFFSETS[other] + 6].astype(np.float64)
+        other_centres, other_radii = self._arm_model(other, other_joints).world(
+            self.kinematics.root(other), other_joints)
+        moving = model.frame >= self._height_fixed_frames(model, root)
+        if not moving.any():
+            moving[:] = True
+        results = []
+        for solutions in found:
+            rows = []
+            for solution in solutions:
+                centres, radii = model.world(root, solution["joints"])
+                gaps = (np.linalg.norm(centres[:, None] - other_centres[None], axis=2)
+                        - radii[:, None] - other_radii[None])
+                row = {
+                    "joints": np.round(solution["joints"], 5).tolist(),
+                    "position_error_mm": round(solution["position_error_mm"], 3),
+                    "rotation_error_deg": round(solution["rotation_error_deg"], 3),
+                    "limit_margin_rad": round(solution["limit_margin_rad"], 4),
+                    "distance_from_seed_rad": round(solution["distance_from_seed_rad"], 4),
+                    "lowest_z_m": round(float((centres[moving, 2] - radii[moving]).min()), 4),
+                    "other_arm_clearance_m": round(float(gaps.min()), 4),
+                }
+                if robot_spheres:
+                    row["robot_spheres"] = self._sphere_rows(centres, radii).tolist()
+                rows.append(row)
+            results.append({"reachable": bool(solutions and solutions[0]["accurate"]),
+                            "solutions": rows})
+        return {
+            "arm": arm,
+            "step_id": int(self.step_id),
+            "frame": "environment_origin",
+            "measured_joints": np.round(measured, 5).tolist(),
+            "seed_joints": np.round(seed, 5).tolist(),
+            "joint_limits_rad": np.round(limits, 4).tolist(),
+            "reachable_count": sum(item["reachable"] for item in results),
+            "results": results,
+            "tolerances": {"position_mm": POSITION_TOLERANCE_MM,
+                           "rotation_deg": ROTATION_TOLERANCE_DEG},
+            "notes": (
+                "Robot-only: no task objects. Solutions are link6 joint angles, accurate ones "
+                "nearest the seed first. lowest_z_m is the lowest point of the arm's moving "
+                "links and fingers; other_arm_clearance_m is against the other arm at its "
+                "measured joints. Finger spheres cover their whole stroke, so both are "
+                "conservative near the gripper by up to about 2 cm."
+            ),
+            "physical_steps": 0,
         }
 
     def _motion_plan_diagnostics(self, arm, joints, target):
@@ -834,11 +946,11 @@ class RoboDojoSession:
         }
         if op == "teacher_observation":
             return self.obs
-        if op == "robot_spheres":
+        if op in ("robot_spheres", "ik"):
             # Robot-only geometry; it never touches the simulator's scene.
             try:
-                return self.robot_spheres()
-            except ValueError as exc:
+                return self.robot_spheres() if op == "robot_spheres" else self.ik(**data)
+            except (TypeError, ValueError) as exc:
                 raise RejectedBeforeAction(str(exc)) from exc
         if op in ("fk_preview", "eef_joint_target"):
             # Pure kinematics on requested targets; invalid requests leave the simulator untouched.

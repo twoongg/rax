@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from .gripper import TCP_IN_LINK6_M, TIP_BEYOND_TCP_M, link6_from_tcp, tcp_from_link6
+
 ROTATION_REPRESENTATIONS = (
     "quaternion_wxyz",
     "quaternion_xyzw",
@@ -200,6 +202,14 @@ def _pose_result(
     }
 
 
+def _tcp_frame() -> dict[str, Any]:
+    return {
+        "tcp_in_link6_m": list(TCP_IN_LINK6_M),
+        "fingertips_beyond_tcp_m": TIP_BEYOND_TCP_M,
+        "axes": "approach = link6 +x, closing = link6 +y",
+    }
+
+
 def pose_math(project_root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute one validated, scene-independent high-level pose operation.
 
@@ -210,6 +220,8 @@ def pose_math(project_root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     inverse under the selected convention. ``format_target`` and
     ``extract_target`` translate between general poses and the named RoboDojo
     EEF/cuRobo target fields without reading or advancing simulation.
+    ``link6_from_tcp`` turns a tool-centre-point position plus approach and
+    closing directions into the link6 pose; ``tcp_from_link6`` is its inverse.
     """
 
     math_module = _load_isaac_math(str(Path(project_root).resolve()))
@@ -334,10 +346,38 @@ def pose_math(project_root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
             if not np.isfinite(opening) or not 0.0 <= opening <= 1.0:
                 raise ValueError("eef_target.gripper_opening must be in [0, 1]")
             result["gripper_opening"] = opening
+    elif operation == "link6_from_tcp":
+        position, rotation = link6_from_tcp(
+            arguments.get("tcp_position_m"), arguments.get("approach"), arguments.get("closing")
+        )
+        quaternion = _rotation_to_quaternion(
+            math_module,
+            {"representation": "rotation_matrix_row_major",
+             "value": rotation.reshape(-1).tolist()},
+        )
+        result = {
+            "pose": _pose_result(
+                math_module, torch.as_tensor(position, dtype=torch.float64), quaternion,
+                output_representation,
+            ),
+            **_tcp_frame(),
+        }
+    elif operation == "tcp_from_link6":
+        position, quaternion = _full_pose(math_module, arguments.get("pose"), "pose")
+        rotation = math_module.matrix_from_quat(quaternion.reshape(1, 4))[0]
+        tcp, approach, closing = tcp_from_link6(
+            position.cpu().numpy(), rotation.cpu().numpy()
+        )
+        result = {
+            "tcp_position_m": tcp.tolist(),
+            "approach": approach.tolist(),
+            "closing": closing.tolist(),
+            **_tcp_frame(),
+        }
     else:
         raise ValueError(
             "operation must be convert_rotation, compose_pose, relative_pose, "
-            "format_target, or extract_target"
+            "format_target, extract_target, link6_from_tcp, or tcp_from_link6"
         )
 
     result.update(
