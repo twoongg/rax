@@ -39,7 +39,8 @@ from services.simulator.io import (
 
 MAX_ACTIONS = MAX_EEF_ACTIONS = MAX_TRAJECTORY_ACTIONS
 CAMERAS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
-IK_ARGUMENTS = frozenset({"arm", "targets", "seed_joints", "max_solutions", "robot_spheres"})
+IK_ARGUMENTS = frozenset({"arm", "targets", "seed_joints", "max_solutions", "robot_spheres",
+                          "table_z_m"})
 TASK_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 RUN_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 SETUP_TOOLS = {
@@ -1094,7 +1095,7 @@ class RoboDojoMCP:
             },
             {
                 "name": "robodojo_ik",
-                "description": "Solve link6 inverse kinematics for 1..256 target poses of one arm in one call, without moving or stepping. Per target: whether it is reachable (within 5 mm and 3 degrees), joint angles (accurate solutions nearest the seed first), the margin to the nearest joint limit, the lowest point of the moving arm and its clearance to the other arm at its measured joints. Also returns the arm's joint limits. Robot-only: it does not see task objects or the table. Use it to check that every pose of a plan (pre-grasp, grasp, lift, place) is reachable with the same grasp before moving.",
+                "description": "Solve link6 inverse kinematics for 1..256 target poses of one arm in one call, without moving or stepping. Per target: ok and why, whether it is reachable (within 5 mm and 3 degrees), joint angles, the margin to the nearest joint limit, the lowest point of the moving arm and its clearance to the other arm at its measured joints. ok means reachable, at least 0.1 rad from every joint limit, at least 2 cm from the other arm and, with table_z_m, above the table top; why names what fails. Solutions that are ok come first, then accurate ones nearest the seed. Also returns the arm's joint limits (its URDF's, tightened by the simulator's). Robot-only: it does not see task objects. Use it to check that every pose of a plan (pre-grasp, grasp, lift, place) is ok with the same grasp before moving.",
                 "inputSchema": {
                     "type": "object",
                     "additionalProperties": False,
@@ -1145,6 +1146,10 @@ class RoboDojoMCP:
                             "type": "boolean",
                             "default": False,
                             "description": "Also return each solution's body spheres [x, y, z, radius] in the environment frame (at most 16 targets), to check the arm against depth points.",
+                        },
+                        "table_z_m": {
+                            "type": "number",
+                            "description": "The table top's environment z in metres. With it, a pose whose arm reaches lower than 5 mm above it is not ok.",
                         },
                     },
                 },

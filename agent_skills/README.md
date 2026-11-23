@@ -31,7 +31,7 @@ ARX X5, table-top) or `behavior` (R1Pro, BEHAVIOR-1K). The agent sees one flat
 | `free-space-move` | cuRobo single-arm moves | cuRobo arm and trunk moves, local IK |
 | `object-localization` | depth: `robodojo_pixel_to_position`; RGB-only: images and measured robot poses, without depth or camera geometry | depth: `behavior_pixel_to_position` (always RGB-D) |
 | `point-cloud` | depth only: `point_cloud.py`, which the agent copies into its project (`objects` on the table, `segment` from a pixel, object-frame offsets; the robot removed with `robodojo_observe(robot_spheres=True)`) | - |
-| `grasp-planning` | `grasp.py`: the gripper's tool centre point relative to link6, checking a plan's poses with `robodojo_ik`, reading a close (wrist depth points between the pads with depth) | - |
+| `grasp-planning` | `grasp.py`: the gripper's tool centre point relative to link6, reading a close (wrist depth points between the pads with depth) | - |
 | `pose-math`, `action-preview`, `action-search` | yes | - |
 | `base-navigation`, `motion-preview` | - | yes |
 
