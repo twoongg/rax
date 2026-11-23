@@ -39,6 +39,7 @@ from services.simulator.io import (
 
 MAX_ACTIONS = MAX_EEF_ACTIONS = MAX_TRAJECTORY_ACTIONS
 CAMERAS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
+IK_ARGUMENTS = frozenset({"arm", "targets", "seed_joints", "max_solutions", "robot_spheres"})
 TASK_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 RUN_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 SETUP_TOOLS = {
@@ -908,7 +909,7 @@ class RoboDojoMCP:
             },
             {
                 "name": "robodojo_pose_math",
-                "description": "Convert rotations, add or extract local/environment pose deltas, and format or inspect exact RoboDojo link6 targets using canonical Isaac Lab math. This is read-only robot geometry: it does not require an episode or access scene state.",
+                "description": "Convert rotations, add or extract local/environment pose deltas, format or inspect exact RoboDojo link6 targets, and convert between link6 and the gripper's tool centre point (TCP, between the finger pads) using canonical Isaac Lab math. This is read-only robot geometry: it does not require an episode or access scene state.",
                 "inputSchema": {
                     "type": "object",
                     "additionalProperties": False,
@@ -922,9 +923,32 @@ class RoboDojoMCP:
                                 "relative_pose",
                                 "format_target",
                                 "extract_target",
+                                "link6_from_tcp",
+                                "tcp_from_link6",
                             ],
                         },
                         "rotation": rotation,
+                        "tcp_position_m": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description": "link6_from_tcp: where the point between the finger pads goes, environment metres.",
+                        },
+                        "approach": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description": "link6_from_tcp: the direction the gripper points, out between the fingers, in environment axes; [0, 0, -1] is straight down.",
+                        },
+                        "closing": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description": "link6_from_tcp: the direction the fingers close along, made perpendicular to approach; omitted means horizontal. Required for a vertical approach.",
+                        },
                         "output_representation": {
                             "type": "string",
                             "enum": [
@@ -1066,6 +1090,63 @@ class RoboDojoMCP:
                     "additionalProperties": False,
                     "required": ["motion_plan_id"],
                     "properties": {"motion_plan_id": {"type": "string"}},
+                },
+            },
+            {
+                "name": "robodojo_ik",
+                "description": "Solve link6 inverse kinematics for 1..256 target poses of one arm in one call, without moving or stepping. Per target: whether it is reachable (within 5 mm and 3 degrees), joint angles (accurate solutions nearest the seed first), the margin to the nearest joint limit, the lowest point of the moving arm and its clearance to the other arm at its measured joints. Also returns the arm's joint limits. Robot-only: it does not see task objects or the table. Use it to check that every pose of a plan (pre-grasp, grasp, lift, place) is reachable with the same grasp before moving.",
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["arm", "targets"],
+                    "properties": {
+                        "arm": {"type": "string", "enum": ["left", "right"]},
+                        "targets": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 256,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["position", "quaternion_wxyz"],
+                                "properties": {
+                                    "position": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                        "minItems": 3,
+                                        "maxItems": 3,
+                                        "description": "Environment-origin link6 position in metres.",
+                                    },
+                                    "quaternion_wxyz": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                        "minItems": 4,
+                                        "maxItems": 4,
+                                        "description": "Environment-origin link6 orientation as unit wxyz.",
+                                    },
+                                },
+                            },
+                        },
+                        "seed_joints": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 6,
+                            "maxItems": 6,
+                            "description": "Six joint angles (rad) to start from and rank solutions by; default the arm's measured joints.",
+                        },
+                        "max_solutions": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8,
+                            "default": 1,
+                            "description": "Distinct solutions per target; targets times max_solutions must be at most 256.",
+                        },
+                        "robot_spheres": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Also return each solution's body spheres [x, y, z, radius] in the environment frame (at most 16 targets), to check the arm against depth points.",
+                        },
+                    },
                 },
             },
             {
@@ -1607,6 +1688,13 @@ class RoboDojoMCP:
                 "execute_motion_plan", motion_plan_id=str(arguments["motion_plan_id"])
             )
             return self._motion_result_packet(result)
+        if name == "robodojo_ik":
+            unknown = set(arguments) - IK_ARGUMENTS
+            if unknown:
+                raise ValueError(f"Unknown robodojo_ik arguments: {sorted(unknown)}")
+            if "arm" not in arguments or "targets" not in arguments:
+                raise ValueError("robodojo_ik requires arm and targets")
+            return _jsonable(sim.request("ik", **arguments)), []
         if name == "robodojo_fk_preview":
             import numpy as np
 
@@ -1717,7 +1805,8 @@ class RoboDojoMCP:
         profile = observation_for(self)
         if name == "robodojo_pixel_to_position" and not profile.geometry:
             raise PermissionError("Pixel-to-position is unavailable with RGB-only observations")
-        if name == "robodojo_observe" and arguments.get("robot_spheres") and not profile.geometry:
+        if (name in ("robodojo_observe", "robodojo_ik") and arguments.get("robot_spheres")
+                and not profile.geometry):
             raise PermissionError("Robot spheres are for depth observations; unavailable with RGB-only")
         # EEF batches issue several native requests; packet assembly can also request
         # an observation after motion. A rejection applies to the whole tool only
