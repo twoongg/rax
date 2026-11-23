@@ -3,6 +3,7 @@ simulator or GPU; only the system, the agent's Python environment and the bundle
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -125,15 +126,39 @@ class BundleSandbox:
                     '--ro-bind', str(sdk), str(workspace/'api/runtime.py')]
         if frames is not None:
             command += ['--ro-bind', str(frames), str(workspace/frame_path(frames))]
-        variables = {'HOME': str(workspace), 'PATH': f'{environment}/bin:/usr/bin:/bin',
-                     'PYTHONPATH': f'{workspace}:{project}', 'PYTHONDONTWRITEBYTECODE': '1',
-                     'PYTHONNOUSERSITE': '1', 'PIP_NO_INDEX': '1', 'HF_HUB_OFFLINE': '1',
-                     'WANDB_MODE': 'disabled', 'LANG': 'C.UTF-8', **thread_variables(self.limits.cpus)}
         command += ['--chdir', str(workspace), '--clearenv']
-        for name, value in variables.items():
+        for name, value in self.variables(workspace, project, environment).items():
             command += ['--setenv', name, value]
-        return command + ['--', str(environment/'bin/python'), '-u', str(workspace/'api/runtime.py'), mode,
-                          str(project), entrypoint]
+        return command + ['--', *self.python(workspace, project, environment, mode, entrypoint)]
+
+    def variables(self, workspace, project, environment):
+        """The bundle's whole environment (nothing of the operator's)."""
+        return {'HOME': str(workspace), 'PATH': f'{environment}/bin:/usr/bin:/bin',
+                'PYTHONPATH': f'{workspace}:{project}', 'PYTHONDONTWRITEBYTECODE': '1',
+                'PYTHONNOUSERSITE': '1', 'PIP_NO_INDEX': '1', 'HF_HUB_OFFLINE': '1',
+                'WANDB_MODE': 'disabled', 'LANG': 'C.UTF-8', **thread_variables(self.limits.cpus)}
+
+    @staticmethod
+    def python(workspace, project, environment, mode, entrypoint):
+        return [str(environment/'bin/python'), '-u', str(workspace/'api/runtime.py'), mode, str(project), entrypoint]
+
+    def scaffold(self, layout, project, *, bundle, sdk, writable, frames):
+        """Empty read-only workspace scaffold, never the agent's live filesystem."""
+        (layout / project).mkdir(parents=True, mode=0o755)
+        (layout / 'output').mkdir(mode=0o755)
+        (layout / 'api').mkdir(mode=0o755)
+        (layout / 'api/runtime.py').touch(mode=0o444)
+        if frames is not None:
+            (layout / frame_path(frames)).mkdir(parents=True)
+
+    def launch(self, bundle, mode, entrypoint, **paths):
+        """The process to start, its environment and working directory (None: inherited)."""
+        return self.command(bundle, mode, entrypoint, **paths), None, None
+
+    def kill(self, process):
+        # The sandbox's own process tree dies with it (--die-with-parent, its PID namespace).
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
 
     def limit(self):
         """preexec_fn: the sandbox's memory, file and core limits (inherited by everything in it)."""
@@ -163,16 +188,10 @@ class BundleSandbox:
         with sdk.open("xb") as stream:
             stream.write(RUNTIME_SOURCE.read_bytes())
         sdk.chmod(0o444)
-        # Empty read-only workspace scaffold, never the agent's live filesystem.
         layout = output / 'workspace'
-        (layout / project).mkdir(parents=True, mode=0o755)
-        (layout / 'output').mkdir(mode=0o755)
-        (layout / 'api').mkdir(mode=0o755)
-        (layout / 'api/runtime.py').touch(mode=0o444)
-        if frames is not None:
-            (layout / frame_path(frames)).mkdir(parents=True)
         writable = output / "writable"
         writable.mkdir(mode=0o700)
+        self.scaffold(layout, project, bundle=bundle, sdk=sdk, writable=writable, frames=frames)
         end_at = wall_end(self.limits.wall_seconds, wall_seconds)
         output_error = None
         process = None
@@ -191,9 +210,10 @@ class BundleSandbox:
                 raise ExecutionDeadline()
             with deadline(remaining):
                 execution_started = time.monotonic()
-                process = subprocess.Popen(self.command(bundle, mode, entrypoint, workspace=workspace, layout=layout,
-                                                        writable=writable, sdk=sdk, frames=frames,
-                                                        workspace_path=workspace_path),
+                arguments, environment, cwd = self.launch(bundle, mode, entrypoint, workspace=workspace,
+                                                          layout=layout, writable=writable, sdk=sdk,
+                                                          frames=frames, workspace_path=workspace_path)
+                process = subprocess.Popen(arguments, env=environment, cwd=cwd,
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                            start_new_session=True, preexec_fn=self.limit)
                 selector = selectors.DefaultSelector()
@@ -248,9 +268,7 @@ class BundleSandbox:
             if execution_started is not None:
                 self.execution_seconds = time.monotonic() - execution_started
             if process:
-                # The sandbox's own process tree dies with it (--die-with-parent, its PID namespace).
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                self.kill(process)
                 process.wait(timeout=10)
                 # Drain error output already emitted before a terminal action.
                 os.set_blocking(process.stderr.fileno(), False)
@@ -280,6 +298,76 @@ class BundleSandbox:
                 shutil.rmtree(writable, ignore_errors=True)
         return {"reason": reason, "returncode": returncode, "logs": log_details,
                 "simulator_exited": gateway and gateway.simulator_exited, "output_error": output_error}
+
+
+class UnconfinedBundle(BundleSandbox):
+    """A bundle as a plain process, for sessions with the sandbox off (hosts where bubblewrap
+    cannot create namespaces, such as Kubernetes pods).
+
+    It keeps what a controller relies on: a workspace with the bundle at its project path, the
+    runtime API, `output/` (exported the same way) and its frames; the bundle's environment
+    with GPUs hidden from CUDA; the memory, file and time limits; and the end of its processes
+    with the run. It confines nothing: the bundle has the operator's filesystem, network and
+    processes. The workspace is a directory of links in the run's output, not the agent's own
+    workspace path, and /tmp is a private directory without its size cap."""
+
+    PR_SET_PDEATHSIG = 1
+
+    def __init__(self, limits):
+        super().__init__(limits)
+        # Looked up before fork: the child only calls it (bwrap --die-with-parent does the same).
+        self._prctl = ctypes.CDLL(None, use_errno=True).prctl if sys.platform.startswith('linux') else None
+
+    def preflight(self):
+        if not (python_environment()/'bin/python').is_file():
+            raise RuntimeError(f'No Python in {python_environment()}')
+
+    def scaffold(self, layout, project, *, bundle, sdk, writable, frames):
+        (layout / project).parent.mkdir(parents=True, mode=0o755)
+        (layout / project).symlink_to(Path(bundle).resolve(), target_is_directory=True)
+        (layout / 'output').symlink_to(writable.resolve(), target_is_directory=True)
+        (layout / 'api').mkdir(mode=0o755)
+        (layout / 'api/runtime.py').symlink_to(sdk.resolve())
+        if frames is not None:
+            (layout / frame_path(frames)).parent.mkdir(parents=True)
+            (layout / frame_path(frames)).symlink_to(Path(frames).resolve(), target_is_directory=True)
+
+    def launch(self, bundle, mode, entrypoint, *, workspace, layout, writable, sdk, frames=None,
+               workspace_path='code/controller'):
+        layout = layout.resolve()
+        project = layout/project_directory(workspace_path)
+        environment = python_environment()
+        scratch = layout.parent/'tmp'
+        scratch.mkdir(mode=0o700)
+        variables = {**self.variables(layout, project, environment), 'TMPDIR': str(scratch),
+                     'CUDA_VISIBLE_DEVICES': ''}  # No GPU, as in the sandbox.
+        return self.python(layout, project, environment, mode, entrypoint), variables, str(layout)
+
+    def limit(self):
+        super().limit()
+        if self._prctl is not None:
+            self._prctl(self.PR_SET_PDEATHSIG, signal.SIGKILL)
+
+    def kill(self, process):
+        # No PID namespace: the run's process group is what is left of it (a child that started
+        # its own session escapes, as it would any process supervisor).
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def run(self, bundle, *, output, **arguments):
+        try:
+            return super().run(bundle, output=output, **arguments)
+        finally:
+            # Links into the bundle, the exports and the frames, and the run's scratch files.
+            shutil.rmtree(output/'workspace', ignore_errors=True)
+            shutil.rmtree(output/'tmp', ignore_errors=True)
+
+
+def bundle_runner(config):
+    """How a session's bundles run: in bubblewrap, or (sandbox off) as plain processes."""
+    return BundleSandbox if getattr(config, 'sandbox', True) else UnconfinedBundle
 
 
 def frame_path(frames):

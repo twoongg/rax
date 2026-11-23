@@ -45,6 +45,8 @@ def retire_fields(value):
     # Sessions saved before a perception server could be named used Gemini on OpenRouter.
     value.setdefault('perception_url', None)
     value.setdefault('perception_model', None)
+    # Sessions saved before the sandbox could be turned off ran in it.
+    value.setdefault('sandbox', True)
     return value
 
 
@@ -97,6 +99,11 @@ class Configuration:
     # server's base URL (such as a local vLLM) and the model name it serves.
     perception_url: str | None = None
     perception_model: str | None = None
+    # Off: no bubblewrap anywhere, for hosts that cannot create unprivileged user namespaces (such
+    # as Kubernetes pods). Claude Code runs the agent's commands without its sandbox and bundles
+    # run as plain processes (services/controller/sandbox.py UnconfinedBundle): the same workspace
+    # layout, environment and limits, but nothing hides the host, its network or its GPUs.
+    sandbox: bool = True
     agent_effort: str = 'xhigh'  # Model reasoning effort for the agent CLI: xhigh or max
     # The session's one evaluation mode. Off (code mode): the agent submits one rehearsed
     # bundle, run alone on the held-out layouts. On (live-copy mode, services/agent_formal):
@@ -153,6 +160,11 @@ class Configuration:
             raise ValueError('external_perception must be boolean')
         from services.controller.gemini import validate_perception
         validate_perception(self.perception_url, self.perception_model)
+        if type(self.sandbox) is not bool:
+            raise ValueError('sandbox must be true or false')
+        if not self.sandbox and self.agent_cli != 'claude':
+            raise ValueError('sandbox off is only available with Claude Code (agent_cli claude); the other '
+                             'agent CLIs bring their own sandbox')
         if self.perception_url and not self.external_perception:
             raise ValueError('perception_url names the model behind the external perception tool; '
                              'it needs external_perception on')

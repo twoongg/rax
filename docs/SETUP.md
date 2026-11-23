@@ -26,6 +26,8 @@ repository holds only source code. Everything the scripts download or build goes
   your (non-root) user. Submitted robot programs run in it, and Claude Code's sandbox
   uses it together with `socat`. Codex brings its own sandbox. No Docker is needed.
   On Ubuntu: `sudo apt install bubblewrap socat`.
+  Where it cannot create namespaces (such as in a Kubernetes pod), Claude Code sessions
+  can run unconfined with `--sandbox off` ([Usage](USAGE.md#settings)).
 - **Host tools:** `git`, `git-lfs`, `curl`, `sha256sum` and `nvidia-smi`. Everything else
   (conda, Python, CUDA compiler) is installed by the scripts.
 - **Disk:** use a fast local SSD for `runtime/`.

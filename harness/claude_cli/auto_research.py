@@ -205,14 +205,20 @@ def settings(config, deployed, socket):
     read_paths = [*reads, *(workspace / relative for _, relative in reference_sources(config))]
     guarded = [str(path) for path in protected(workspace)]
     rule = lambda tool, path: f'{tool}(/{path})'  # Absolute paths are written //like/this.
+    permissions = {
+        # File edits in the workspace need no approval; sandboxed commands neither
+        # (autoAllowBashIfSandboxed). Anything else outside the workspace is not allowed.
+        'defaultMode': 'acceptEdits',
+        'allow': [f'mcp__{MCP_SERVER}', *(rule('Read', f'{path}/**') for path in read_paths)],
+        'deny': [*DENIED_TOOLS, *(rule('Edit', path) for path in guarded),
+                 *(rule('Edit', f'{path}/**') for path in guarded)]}
+    if not getattr(config, 'sandbox', True):
+        # Sandbox off (hosts without bubblewrap): nobody answers approvals, so every command is
+        # allowed, unconfined. The file tools keep their rules.
+        permissions['allow'].append('Bash')
+        return {'permissions': permissions, 'sandbox': {'enabled': False}, 'cleanupPeriodDays': 3650}
     return {
-        'permissions': {
-            # File edits in the workspace need no approval; sandboxed commands neither
-            # (autoAllowBashIfSandboxed). Anything else outside the workspace is not allowed.
-            'defaultMode': 'acceptEdits',
-            'allow': [f'mcp__{MCP_SERVER}', *(rule('Read', f'{path}/**') for path in read_paths)],
-            'deny': [*DENIED_TOOLS, *(rule('Edit', path) for path in guarded),
-                     *(rule('Edit', f'{path}/**') for path in guarded)]},
+        'permissions': permissions,
         'sandbox': {
             'enabled': True, 'failIfUnavailable': True, 'autoAllowBashIfSandboxed': True,
             'allowUnsandboxedCommands': False,

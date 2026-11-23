@@ -62,6 +62,7 @@ names the reason, for example `--task-rules does not apply to BEHAVIOR sessions:
 | `--agent-effort` | `xhigh` | Reasoning effort, `xhigh` or `max`, for the agent and its formal copies |
 | `--external-perception` | `on` | `off` removes the `gemini_generate` tool; see [section 8](#8-gemini) |
 | `--perception-url`, `--perception-model` | none | Serve `gemini_generate` from your own OpenAI-compatible server and model instead of Gemini; see [section 8](#8-gemini) |
+| `--sandbox` | `on` | `off` runs without bubblewrap, for hosts that cannot create user namespaces (such as Kubernetes pods); Claude Code only. Claude Code runs the agent's commands without its sandbox, and bundles run as plain processes with the same workspace layout, exports, environment and limits. Nothing is isolated: the agent and its programs can read your files, reach the network and see the host's processes |
 | `--observation-profile` | `rgbd` | `rgbd`, or `rgb-only` (no depth or camera geometry). BEHAVIOR: always `rgbd` |
 | `--demonstration-context` | `terminal_state` | What the agent sees of a demonstration: `terminal_state` (the final frame), `completion_sequence` (ordered frames of the whole demonstration) or `none` |
 | `--task-rules` | `public` | RoboDojo: `public` (the public rubric) or `code-summary` (adds the success stages, thresholds and partial credit summarized from the official task code). BEHAVIOR: always the official BDDL task definition |
@@ -405,7 +406,7 @@ perception tool.
 | `<flag> does not apply to BEHAVIOR sessions: <reason>` | Leave that flag out for BEHAVIOR |
 | `Codex binary is required` | Install Codex on `PATH` ([Setup, step 4](SETUP.md#4-agent-cli-and-model-credentials)), or prepare with `--agent-cli claude` |
 | `Claude Code binary is required (install claude on the host)` | Install Claude Code on `PATH` |
-| `bubblewrap (bwrap) is required to run bundles` | Install bubblewrap ([Setup, step 0](SETUP.md#0-host-requirements)) |
+| `bubblewrap (bwrap) is required to run bundles` | Install bubblewrap ([Setup, step 0](SETUP.md#0-host-requirements)); where it cannot create namespaces, prepare a Claude Code session with `--sandbox off` |
 | `Provider profile '<name>' needs model_provider ...` | Create `<CODEX_HOME>/<name>.config.toml`, or use the built-in `openrouter` profile |
 | `The OpenRouter profile needs a key file ...` | Put the key in `~/.codex/secrets/openrouter_api_key` or pass `--key-file` |
 | `Provider profile '<name>' needs its own key file ([robodojo] key_file) ...` | Add `key_file` to the profile's `[robodojo]` table; the OpenRouter key goes only to OpenRouter |

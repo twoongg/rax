@@ -57,7 +57,7 @@ fi
 if bwrap --ro-bind / / --unshare-all --die-with-parent true >/dev/null 2>&1; then
     pass "bubblewrap $(bwrap --version 2>&1 | tail -n 1) (bundle sandbox)"
 else
-    fail "bubblewrap missing or unable to create unprivileged namespaces: $(bwrap --ro-bind / / --unshare-all true 2>&1 | tail -n 1)"
+    fail "bubblewrap missing or unable to create unprivileged namespaces: $(bwrap --ro-bind / / --unshare-all true 2>&1 | tail -n 1) (where it cannot, such as in a Kubernetes pod, configure Claude Code sessions with --sandbox off)"
 fi
 command -v socat >/dev/null 2>&1 && pass "socat (Claude Code's sandbox)" \
     || note "no socat: Claude Code's sandbox needs it (Codex does not)"

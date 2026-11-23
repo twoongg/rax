@@ -17,7 +17,7 @@ from services.benchmarks import for_config
 from .gateway import Gateway, MUTATING, complete, sanitized
 from .timing import Timings
 from .errors import describe, public_failure
-from .sandbox import BundleSandbox, ExecutionDeadline, deadline
+from .sandbox import BundleSandbox, ExecutionDeadline, bundle_runner, deadline
 from .storage import persist, snapshot, verify, project_directory
 from .recording import RunRecording
 from .billing import NANODOLLARS, SESSION_LIMIT, nanodollars
@@ -132,7 +132,8 @@ class Supervisor:
     def __init__(self, config, backend_factory, gemini=None, *, runner_factory=BundleSandbox,
                  worker_factory=None, published_root=None):
         self.config, self.backend_factory, self.gemini = config, backend_factory, gemini
-        self.runner_factory = runner_factory
+        # The default runner follows the session's sandbox setting; tests and agent formal pass their own.
+        self.runner_factory = bundle_runner(config) if runner_factory is BundleSandbox else runner_factory
         # Parallel formal episodes run as separate worker processes (formal_worker.py).
         self.worker_factory = worker_factory
         # Workers publish into their parent session's agent-visible run tree.
