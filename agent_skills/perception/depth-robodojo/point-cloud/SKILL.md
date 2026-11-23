@@ -8,8 +8,9 @@ description: Use when a RoboDojo agent or its controller needs whole objects fro
 [Object localization](../object-localization/SKILL.md) turns one chosen pixel into one
 surface point. `point_cloud.py` in this skill turns every depth pixel into a 3-D point,
 lists the objects on the table, and grows one object from a pixel you choose. It reads
-only a robot tool's reply (RGB, metric depth, calibration and the measured link6
-positions), and its positions are in the environment frame that robot commands use.
+only a robot tool's reply (RGB, metric depth, calibration, the measured link6 positions
+and the robot's own body spheres), and its positions are in the environment frame that
+robot commands use.
 
 ## Set up
 
@@ -28,11 +29,15 @@ from point_cloud import observation, objects, segment, overlay
 
 with Context() as ctx:
 {% if multi_env %}
-    obs = observation(ctx.env(env_id).call("robodojo_observe"))  # The environment you use.
+    obs = observation(ctx.env(env_id).call("robodojo_observe", robot_spheres=True))  # The environment you use.
 {% else %}
-    obs = observation(ctx.call("robodojo_observe"))
+    obs = observation(ctx.call("robodojo_observe", robot_spheres=True))
 {% endif %}
 ```
+
+`robot_spheres=True` adds spheres that cover the robot's own body at its measured joints,
+built from the robot's model; the helper then removes the robot from the points. Ask for
+them whenever you use this helper.
 
 {% if formal_episode %}
 Your carried code imports it the same way (`from point_cloud import ...`).
@@ -43,17 +48,19 @@ keeps it.
 A controller imports it the same way (`from point_cloud import ...`); the registered
 bundle carries it.
 {% endif %}
-A motion tool's reply works as well as an observation: it carries the final frame.
+A motion tool's reply works as well as an observation: it carries the final frame, but
+no robot spheres.
 
 ## Calls
 
 | Call | Returns |
 | --- | --- |
-| `observation(reply)` | `obs.rgb[cam]`, `obs.depth[cam]` (metres, 0 = no depth), `obs.eef` (link6 positions), `obs.cameras` (those with depth), `obs.step_id` |
+| `observation(reply)` | `obs.rgb[cam]`, `obs.depth[cam]` (metres, 0 = no depth), `obs.eef` (link6 positions), `obs.spheres` (robot body, `[x, y, z, r]` rows, or None), `obs.cameras` (those with depth), `obs.step_id` |
 | `objects(obs, cameras=None, radius_mm=11, color_tol=None, box=None, include_robot=False)` | every object on the table, largest footprint first; see below |
 | `segment(obs, cam, u, v, radius_mm=11, color_tol=None, cameras=None, box=None, table_z=None)` | one object grown from RGB pixel (u, v) |
 | `describe(points, rgb=None, table_z=None)` | the same summary for points you selected, such as a `cloud(..., box=...)` |
-| `cloud(obs, cameras=None, stride=1, max_depth=2.0, box=None)` | `(xyz, rgb, cam)`: one point per valid depth pixel, its colour, and its camera's index in `obs.cameras` |
+| `cloud(obs, cameras=None, stride=1, max_depth=2.0, box=None, drop_robot=False)` | `(xyz, rgb, cam)`: one point per valid depth pixel, its colour, and its camera's index in `obs.cameras` |
+| `robot_mask(obs, xyz)` | True for points within 2 cm of the robot's body spheres |
 | `profile(item, bin_m=0.005)` | width and top height in slices along the object's long axis, end to end |
 | `local(item, xyz)`, `world(item, offsets)` | points in an object's own frame, and back |
 | `flip(item)` | the object's box turned 180 degrees, so that its +x end becomes the other end |
@@ -74,17 +81,24 @@ the points: `{"center", "size": [longer side, shorter side, height], "yaw_deg"}`
 ## Find objects
 
 `objects(obs)` needs no pixel. It drops the table (everything below `table_z` plus 5 mm,
-with `table_z` measured in the `cam_high` cloud) and splits the rest wherever parts are
-more than `radius_mm` apart. It leaves out parts that reach within 5 cm of a link6 position
-(`robot`: an arm, or an object held or touched by a gripper) and parts that float with
-nothing under them (`supported` false: pieces of an arm). Pass `include_robot=True` to see
-them.
+with `table_z` measured in the `cam_high` cloud) and, with robot spheres, every point
+within 2 cm of the robot's body. It splits the rest wherever parts are more than
+`radius_mm` apart, and leaves out parts that float with nothing under them (`supported`
+false: a held object, or a piece of an arm) and leftovers of the arm (`robot`). Pass
+`include_robot=True` to see them.
+
+- With robot spheres, an object stays an object while a gripper is near or touches it,
+  but its points within 2 cm of the gripper are gone: measure it before the gripper
+  comes close.
+- Without them (a motion tool's reply, or an observation without `robot_spheres=True`),
+  `robot` marks every part within 5 cm of a link6 position, so an object under or in a
+  gripper disappears with the arm.
 
 - Touching objects come out as one part. `color_tol=0.08` splits them at colour edges.
 - A small fragment close to a much larger part of a similar colour joins it, such as a
   thin tab seen apart from its body.
-- The robot's base or a resting gripper can still appear. Recognise them by size and
-  position.
+- Without robot spheres, the robot's base or a resting gripper can still appear.
+  Recognise them by size and position.
 
 `segment(obs, cam, u, v)` grows a single object from a pixel you choose, with the same rules.
 Use it when you are looking at an image yourself.
@@ -99,6 +113,7 @@ A controller has no one to choose pixels, and objects move between layouts. In e
 episode it must find each object again:
 
 ```python
+obs = observation(ctx.call("robodojo_observe", robot_spheres=True))
 items = objects(obs)
 targets = [o for o in items if 0.05 < o["obb"]["size"][0] < 0.07 and o["top_z"] - o["table_z"] < 0.04]
 if len(targets) != 1:
@@ -130,10 +145,12 @@ show up as parts. Keep them relative to a larger object that does:
 
 ## A held object
 
-The gripper is part of the cloud, so a held object merges with it. View the held object
-with the other arm's wrist camera, then keep only what lies beyond the fingertips:
-`describe(*cloud(obs, cam, box=...)[:2])`. Measure where the fingertips are once, from the
-cloud of the empty gripper. `obs.eef` gives link6, not the fingertips.
+The robot spheres cover the fingers over their whole stroke, so most of a held object,
+everything between the fingers and 2 cm around them, goes with the gripper; what sticks
+out beyond the fingertips stays and floats (`supported` false). View the held object with
+the other arm's wrist camera and keep the points in a box beyond the fingertips:
+`describe(*cloud(obs, cam, box=..., drop_robot=True)[:2])`. Measure where the fingertips
+are once, from the empty gripper. `obs.eef` gives link6, not the fingertips.
 
 ## Read the numbers with care
 
@@ -141,7 +158,7 @@ cloud of the empty gripper. `obs.eef` gives link6, not the fingertips.
   leans toward the cameras. When the top is visible, `top` and `obb` describe the footprint
   better. Fusing `cam_high` with a close wrist view adds more sides.
 - The bottom 5 mm is cut away with the table, so `bottom_z` and the height are about that
-  much off.
+  much off. With robot spheres, so is everything within 2 cm of the robot.
 - `cam_high` resolves about 2–3.5 mm per pixel, and a wrist camera 0.15–0.3 m away about
   0.4–0.8 mm. Depth comes in whole millimetres.
 - A call takes about a second or less. `stride=2` in `cloud` cuts the points by four.

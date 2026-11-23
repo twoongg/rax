@@ -823,7 +823,13 @@ class RoboDojoMCP:
                 "description": "Return the exact cached post-action observation with RGB/depth camera attachments, calibration, and measured dual-arm state; this does not step physics.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "robot_spheres": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Also return robot_spheres: spheres covering the robot's own body at the measured joints, from its URDF meshes (fingers over their full stroke), as [x, y, z, radius] in the environment frame. Use them to remove the robot from depth points.",
+                        },
+                    },
                     "additionalProperties": False,
                 },
             },
@@ -1497,8 +1503,17 @@ class RoboDojoMCP:
             return _jsonable(pose_math(self.project_root, arguments)), []
         sim = self._require_active()
         if name == "robodojo_observe":
+            unknown = set(arguments) - {"robot_spheres"}
+            if unknown:
+                raise ValueError(f"Unknown robodojo_observe arguments: {sorted(unknown)}")
+            spheres = arguments.get("robot_spheres", False)
+            if type(spheres) is not bool:
+                raise ValueError("robot_spheres must be a boolean")
             observation = sim.request("teacher_observation")
-            return self._observation_packet(observation)
+            packet, content = self._observation_packet(observation)
+            if spheres:
+                packet["robot_spheres"] = _jsonable(sim.request("robot_spheres"))
+            return packet, content
         if name == "robodojo_pixel_to_position":
             requested_step = int(arguments["observation_step_id"])
             if requested_step != sim.step_id:
@@ -1702,6 +1717,8 @@ class RoboDojoMCP:
         profile = observation_for(self)
         if name == "robodojo_pixel_to_position" and not profile.geometry:
             raise PermissionError("Pixel-to-position is unavailable with RGB-only observations")
+        if name == "robodojo_observe" and arguments.get("robot_spheres") and not profile.geometry:
+            raise PermissionError("Robot spheres are for depth observations; unavailable with RGB-only")
         # EEF batches issue several native requests; packet assembly can also request
         # an observation after motion. A rejection applies to the whole tool only
         # when none of its native rows completed.
