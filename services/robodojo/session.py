@@ -17,6 +17,7 @@ from scipy.spatial.transform import Rotation
 from .camera_calibration import rendered_intrinsics
 from services.simulator.io import RejectedBeforeAction, action_execution_scope, reject_unless, require, write_json
 from .kinematics import DualKinematics, measured_joint_state, transform, validate_eef_target
+from .robot_spheres import arm_spheres
 from .trajectory import (
     GOAL_POSITION_TOLERANCE_M,
     GOAL_ROTATION_TOLERANCE_RAD,
@@ -371,6 +372,34 @@ class RoboDojoSession:
             planner = manager.planner.get(robot.robot_name)
         require(planner is not None, f"No cuRobo planner available for {arm}")
         return robot, planner
+
+    def robot_spheres(self):
+        """The robot's body spheres at the observed joints, in the environment frame."""
+        state = self._motion_state()
+        spheres, counts = [], {}
+        for arm, offset in (("left", 0), ("right", 7)):
+            robot = self.kinematics.robots[arm]
+            model = arm_spheres(
+                str(robot.urdf_path), tuple(robot.arm_joints_name),
+                robot.base_link, robot.ee_link_name,
+            )
+            joints = state[offset:offset + 6].astype(np.float64)
+            require(
+                np.allclose(model.frames(joints)[-1], self.kinematics.fk[arm].matrix(joints),
+                            atol=1e-6),
+                f"Sphere model and arm FK disagree for {arm}",
+            )
+            centres, radii = model.world(self.kinematics.root(arm), joints)
+            # Millimetres, radii rounded up so that every sphere still holds its points.
+            spheres.append(np.c_[np.round(centres, 3), np.ceil(radii * 1000.0) / 1000.0])
+            counts[arm] = len(radii)
+        return {
+            "step_id": int(self.step_id),
+            "frame": "environment_origin",
+            "spheres_m": np.vstack(spheres).tolist(),
+            "counts": counts,
+            "source": "robot URDF meshes at the measured joints; fingers cover their full stroke",
+        }
 
     def _motion_plan_diagnostics(self, arm, joints, target):
         actual = self.kinematics.root(arm) @ self.kinematics.fk[arm].matrix(joints)
@@ -805,6 +834,12 @@ class RoboDojoSession:
         }
         if op == "teacher_observation":
             return self.obs
+        if op == "robot_spheres":
+            # Robot-only geometry; it never touches the simulator's scene.
+            try:
+                return self.robot_spheres()
+            except ValueError as exc:
+                raise RejectedBeforeAction(str(exc)) from exc
         if op in ("fk_preview", "eef_joint_target"):
             # Pure kinematics on requested targets; invalid requests leave the simulator untouched.
             try:
