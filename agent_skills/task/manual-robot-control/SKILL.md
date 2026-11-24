@@ -49,10 +49,19 @@ autonomous controller.
 3. View the current camera images. Identify the relevant objects and a short
    sequence of manipulation stages.
 {% endif %}
+{% if robodojo and camera_geometry %}
+4. Find the objects with `objects()` of [point-cloud](../point-cloud/SKILL.md) and
+   plan the grasp with [grasp-planning](../grasp-planning/SKILL.md), checking every
+   pose with `robodojo_ik`. Choose a small, inspectable action chunk, and pick the
+   motion tool for it as [robot-interface](../robot-interface/SKILL.md) describes.
+   Use [object-localization](../object-localization/SKILL.md) for a single point or a
+   feature too small to be an object.
+{% else %}
 4. Ground the next target in current observations with
    [object-localization](../object-localization/SKILL.md), choose a small, inspectable
    action chunk, and pick the motion tool for it as
    [robot-interface](../robot-interface/SKILL.md) describes.
+{% endif %}
 {% if formal_episode %}
 5. Inspect feedback and new images and revise the next action. Work through the
    completion checklist until every condition holds.

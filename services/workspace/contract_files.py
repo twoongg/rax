@@ -7,7 +7,11 @@ from services.mcp_contract import Contract
 
 def describe(contract: Contract, options=frozenset()) -> str:
     localization = "[object-localization](.agents/skills/object-localization/SKILL.md)"
-    if contract.observation.geometry:
+    if contract.observation.geometry and contract.bench.depth_in_python_only:
+        geometry = ("RGB images and camera calibration are supplied; depth and robot spheres reach Python "
+                    "(`ctx.call`) only. Find objects with [point-cloud](.agents/skills/point-cloud/SKILL.md), "
+                    f"and a single point's metric position with {localization}.")
+    elif contract.observation.geometry:
         geometry = f"RGB images, depth and camera calibration are supplied; get metric positions with {localization}."
     else:
         geometry = f"Only RGB images and measured robot state are supplied; locate objects with {localization}."

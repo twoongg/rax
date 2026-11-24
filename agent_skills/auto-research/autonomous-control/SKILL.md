@@ -139,8 +139,17 @@ the same in exploration, rehearsals and the formal batch:
 ```python
 # code/reach/controller.py — registered controller code
 {% endif %}
+{% if robodojo and camera_geometry %}
+from point_cloud import objects, observation   # copied next to this file
+from grasp import grip, verify                 # likewise
+
+def main(ctx):
+    obs = observation(ctx.call("robodojo_observe", robot_spheres=True))
+    items = objects(obs)   # find every object again in this layout
+{% else %}
 def main(ctx):
     reply = ctx.call("{{ robot.observe }}")
+{% endif %}
     # Your observation–decision–action loop:
 {% if behavior %}
     # ctx.call("behavior_base_move", dx=0.4, dy=0.0, dyaw=0.0)

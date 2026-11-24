@@ -63,7 +63,8 @@ fail to plan: `robodojo_free_space_move` plans its own path and may end in other
 angles, so preview the move and check the measured pose after each move.
 {% if camera_geometry %}
 
-With `robot_spheres: true` (at most 16 poses), each solution carries its body spheres.
+With `robot_spheres=True` (at most 16 poses), each solution carries its body spheres. Ask
+for them from Python with `ctx.call`; a direct call shows only their count.
 `arm_hits(spheres, points)` counts the depth points the arm would touch. Pass it the
 points of the other objects from point-cloud's `objects()`.
 {% endif %}

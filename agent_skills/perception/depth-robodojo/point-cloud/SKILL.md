@@ -39,6 +39,11 @@ with Context() as ctx:
 built from the robot's model; the helper then removes the robot from the points. Ask for
 them whenever you use this helper.
 
+Depth images and robot spheres reach Python only. When you call `robodojo_observe`
+yourself, you see the RGB images, the measured state and a count of the spheres, not
+the depth or the sphere numbers; this helper reads both from a reply that Python got
+with `ctx.call`.
+
 {% if formal_episode %}
 Your carried code imports it the same way (`from point_cloud import ...`).
 {% elif agent_formal %}
