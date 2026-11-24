@@ -22,6 +22,7 @@ def serve_socket(service, listener, *, slots):
     stopping = threading.Event()
     outstanding = {}
     eof = set()
+    states = {}  # Per connection: what `initialize` told the service (its client name).
     listener.settimeout(.25)
 
     def enqueue(event):
@@ -112,6 +113,7 @@ def serve_socket(service, listener, *, slots):
             with clients_lock:
                 clients.discard(connection)
             outstanding.pop(connection, None)
+            states.pop(connection, None)
             eof.discard(connection)
             connection.close()
     try:
@@ -132,10 +134,10 @@ def serve_socket(service, listener, *, slots):
                     continue
                 pending += 1
                 outstanding[connection] = outstanding.get(connection, 0) + 1
-                future = executor_for(value).submit(service.handle, value)
+                future = executor_for(value).submit(service.handle, value, states.setdefault(connection, {}))
                 future.add_done_callback(lambda f, c=connection: done(c, f))
             else:
-                send(connection, service.handle(value))
+                send(connection, service.handle(value, states.setdefault(connection, {})))
     finally:
         stopping.set()
         service.interrupt()
