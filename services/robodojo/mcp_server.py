@@ -117,6 +117,16 @@ def _png_data(value: Any) -> str:
     return base64.b64encode(stream.getvalue()).decode("ascii")
 
 
+def _tcp_positions(observation: dict[str, Any]) -> list | None:
+    """Each arm's TCP (between the finger pads) from its measured link6 pose."""
+    from services.robodojo.gripper import tcp_positions
+
+    positions, quaternions = observation.get("eef_positions"), observation.get("eef_quaternions_wxyz")
+    if positions is None or quaternions is None:
+        return None
+    return tcp_positions(positions, quaternions)
+
+
 def _depth_png_data(value: Any) -> tuple[str, dict[str, Any]]:
     """Encode distance-to-image-plane meters as lossless uint16 millimeters."""
 
@@ -829,7 +839,7 @@ class RoboDojoMCP:
                         "robot_spheres": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Also return robot_spheres: spheres covering the robot's own body at the measured joints, from its URDF meshes (fingers over their full stroke), as [x, y, z, radius] in the environment frame. Use them to remove the robot from depth points.",
+                            "description": "Also return robot_spheres: spheres covering the robot's own body at the measured joints, from its URDF meshes (fingers over their full stroke), as [x, y, z, radius] in the environment frame. Use them to remove the robot from depth points. Python callers (ctx.call) get the spheres and the depth images; a direct call by the agent gets the RGB images, a sphere count and the objects on the table with ids (objects, object_notes).",
                         },
                     },
                     "additionalProperties": False,
@@ -1145,7 +1155,7 @@ class RoboDojoMCP:
                         "robot_spheres": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Also return each solution's body spheres [x, y, z, radius] in the environment frame (at most 16 targets), to check the arm against depth points.",
+                            "description": "Also return each solution's body spheres [x, y, z, radius] in the environment frame (at most 16 targets), to check the arm against depth points. Python callers (ctx.call) get the spheres; a direct call by the agent gets their count.",
                         },
                         "table_z_m": {
                             "type": "number",
@@ -1235,6 +1245,8 @@ class RoboDojoMCP:
             "states": _jsonable(observation.get("states")),
             "eef_positions": _jsonable(observation.get("eef_positions")),
             "eef_quaternions_wxyz": _jsonable(observation.get("eef_quaternions_wxyz")),
+            "tcp_positions": _tcp_positions(observation),
+            "gripper_commands": _jsonable(observation.get("gripper_commands")),
             "environment_origin_world_m": _jsonable(
                 observation.get("environment_origin_world_m")
             ),

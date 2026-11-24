@@ -3,6 +3,8 @@ import io
 import json
 from pathlib import Path
 import re
+import sys
+import types
 
 from services.mcp_contract import Contract
 from services.workspace import Setup, render
@@ -64,11 +66,19 @@ def test_bound_wrapper_routes_lifecycle_but_rejects_global_evaluation_and_rebind
 
 
 @pytest.mark.parametrize('count', [1, 3])
-def test_portable_skill_entrypoint_example_executes_with_either_context(count):
+def test_portable_skill_entrypoint_example_executes_with_either_context(count, monkeypatch):
     root = Path(__file__).resolve().parents[2]
     skill = root/'agent_skills/auto-research/autonomous-control/SKILL.md'
     examples = re.findall(r'```python\n(.*?)```', render(skill.read_text(),
         Setup(Contract(environments=count))), flags=re.S)
+    # The depth example imports the helpers the agent copies next to controller.py.
+    point_cloud = types.ModuleType('point_cloud')
+    point_cloud.observation = lambda reply: reply
+    point_cloud.objects = lambda obs: []
+    grasp = types.ModuleType('grasp')
+    grasp.grip = grasp.verify = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, 'point_cloud', point_cloud)
+    monkeypatch.setitem(sys.modules, 'grasp', grasp)
     namespace = {}
     exec(compile(examples[0], str(skill), 'exec'), namespace)
     for slot in (None, 1):
@@ -76,6 +86,6 @@ def test_portable_skill_entrypoint_example_executes_with_either_context(count):
         namespace['main'](context if slot is None else context.env(slot))
         params = json.loads(wire.getvalue())['params']
         assert params == {'name': 'robodojo_observe',
-                          'arguments': {} if slot is None else {'env_id': slot}}
+                          'arguments': {'robot_spheres': True, **({} if slot is None else {'env_id': slot})}}
     compile(examples[1], str(skill), 'exec')  # Development-only imports/paths.
 

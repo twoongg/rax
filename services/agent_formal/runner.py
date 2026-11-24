@@ -19,6 +19,8 @@ import time
 
 from harness import agent_host
 from services.agent_formal import code_runs
+from services.controller.agent_objects import for_agent
+from services.controller.agent_view import PYTHON_CLIENT
 from services.controller.errors import public_failure
 from services.controller.gemini import MAX_REQUEST_BYTES
 from services.controller.sandbox import ExecutionDeadline, deadline, finalize_within, time_left, wall_end
@@ -79,19 +81,47 @@ class FormalMCP:
         self.gateway, self.token, self.info = gateway, token, info
         self.started = time.monotonic()
 
-    def handle(self, request):
+    def handle(self, request, client=None):
+        """`client` is this connection's state: `initialize` records its name, and every
+        connection but Python's gets agent_view replies (None: full replies)."""
         if not isinstance(request, dict):
             return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         params = request.get('params') if isinstance(request.get('params'), dict) else {}
+        if request.get('method') == 'initialize' and client is not None:
+            info = params.get('clientInfo')
+            client['name'] = info.get('name') if isinstance(info, dict) else None
         if request.get('method') == 'tools/call' and params.get('name') == 'status':
             value = {**self.info, 'elapsed_seconds': round(time.monotonic() - self.started, 1),
                      'episode_ended': bool(self.gateway.terminal)}
             return {'jsonrpc': '2.0', 'id': request.get('id'),
                     'result': {'content': [{'type': 'text', 'text': json.dumps(value)}]}}
+        if request.get('method') == 'tools/call' and client is not None and client.get('name') != PYTHON_CLIENT:
+            return self._agent_call(request, params, client)
         response = self.gateway.handle(self.token, request)
         if request.get('method') == 'tools/list' and isinstance(response, dict) and 'result' in response:
             response['result']['tools'] = [status_tool(), *response['result']['tools']]
         return response
+
+    def _agent_call(self, request, params, client):
+        """The copy's own tool call, through agent_objects.for_agent like the frontend's."""
+        last = {}
+
+        class Failed(Exception):
+            pass
+
+        def call(arguments):
+            last['response'] = self.gateway.handle(
+                self.token, {**request, 'params': {**params, 'arguments': arguments}})
+            if not isinstance(last['response'], dict) or 'result' not in last['response']:
+                raise Failed()
+            return last['response']['result']
+        contract = self.gateway.contract
+        try:
+            result = for_agent(params.get('name'), params.get('arguments') or {}, call, client,
+                               bench=contract.bench, geometry=contract.observation.geometry)
+        except Failed:
+            return last['response']
+        return {**last['response'], 'result': result}
 
 
 class AgentRunner:
@@ -241,7 +271,7 @@ class AgentRunner:
         """Dispatch the agent's clients on this (deadline-owning) thread until the agent exits."""
         finalizing = False
         listener.setblocking(False)
-        buffers = {}
+        buffers, clients = {}, {}
         with selectors.DefaultSelector() as poll:
             poll.register(listener, selectors.EVENT_READ)
             try:
@@ -255,6 +285,7 @@ class AgentRunner:
                                 continue
                             client.setblocking(False)
                             buffers[client] = bytearray()
+                            clients[client] = {}
                             poll.register(client, selectors.EVENT_READ)
                             continue
                         try:
@@ -269,7 +300,7 @@ class AgentRunner:
                                 line, _, tail = pending.partition(b'\n')
                                 pending[:] = tail
                                 try:
-                                    response = endpoint.handle(json.loads(line))
+                                    response = endpoint.handle(json.loads(line), clients[connection])
                                 except (ValueError, UnicodeError):
                                     response = {'jsonrpc': '2.0', 'id': None,
                                                 'error': {'code': -32700, 'message': 'Invalid request'}}
@@ -280,6 +311,7 @@ class AgentRunner:
                         except (ConnectionError, OSError):
                             poll.unregister(connection)
                             buffers.pop(connection, None)
+                            clients.pop(connection, None)
                             connection.close()
                     if gateway.terminal and not finalizing:
                         finalizing = True

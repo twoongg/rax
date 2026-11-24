@@ -71,8 +71,29 @@ later session on this task with new layouts.
    tools, and confirm success with `evaluate` or native `task_complete: true` before
    automating.
 {% if robodojo and camera_geometry %}
-   To measure an object's centre, footprint, top height or yaw from depth, use
-   [point-cloud](.agents/skills/point-cloud/SKILL.md).
+   Work in this order. Each step names the skill to read before you do it.
+   1.1 Write the completion checklist from `TASK.md` in `memory/PROGRESS.md`.
+   1.2 Find the objects: call `robodojo_observe`. Its `objects` list gives each object
+       an id that stays with it for the episode, with its centre, size and yaw, and
+       `object_notes` say what moved, what a gripper holds and what was found again
+       ([point-cloud](.agents/skills/point-cloud/SKILL.md)). For overlays, segments and
+       positions on an object, use `point_cloud.py` in Python, copied into
+       `code/<project>/`. Depth reaches Python only.
+   1.3 Plan the grasp, carry and place before moving
+       ([grasp-planning](.agents/skills/grasp-planning/SKILL.md)): build each link6 pose
+       from where the gripper's centre goes, check every pose of the plan in one
+       `robodojo_ik` call, and use only a plan whose poses are all `ok`. Every reply
+       gives the gripper's centre as `tcp_positions`; `eef_positions` is link6, about
+       15 cm behind it.
+   1.4 Move with `robodojo_free_space_move`
+       ([free-space-move](.agents/skills/free-space-move/SKILL.md)). After closing the
+       gripper, check the grip with `grip` and `verify` of `grasp.py`, lift 1.5 cm, and
+       call `robodojo_observe`: `object_notes` should say that gripper holds the object.
+       Only then carry. After each release, lift or back the gripper off by at least
+       3 cm, call `robodojo_observe`, and compare where the object is and how it is
+       turned with what you wanted before you grasp it again.
+   1.5 Call `evaluate`. If it is false, observe, find the objects again (1.2) and fix
+       the condition that fails.
 {% endif %}
 {% if agent_formal %}
 2. **Automate what you did.** Read
@@ -90,8 +111,11 @@ later session on this task with new layouts.
    Prefer simple motion functions and heuristics. Use
    [gemini](.agents/skills/gemini/SKILL.md) for visual and spatial perception.
 {% if robodojo and camera_geometry %}
-   Find objects again in every layout with `objects()` of
-   [point-cloud](.agents/skills/point-cloud/SKILL.md).
+   2.1 Copy `grasp.py` next to `point_cloud.py` in `code/<project>/`. The controller
+       imports both, and {% if agent_formal %}the code you carry keeps them{% else %}the registered bundle carries them{% endif %}.
+   2.2 Do 1.2–1.4 in code with the same helpers, in every episode: observe with
+       `robot_spheres=True`, find the objects with `objects()`, check the plan with
+       `robodojo_ik`, and check each close with `verify` before lifting.
 {% endif %}
 {% if agent_formal %}
 3. **Practise with your controller.** Put the controller under

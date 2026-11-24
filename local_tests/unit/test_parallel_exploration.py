@@ -286,7 +286,7 @@ def test_pipelined_socket_calls_run_in_parallel_and_ids_images_survive(tmp_path)
         def parallel_request(self, request):
             return request['method'] == 'step'
 
-        def handle(self, request):
+        def handle(self, request, client=None):
             if request['method'] == 'stop':
                 raise SystemExit()
             barrier.wait(timeout=3)

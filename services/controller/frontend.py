@@ -12,6 +12,7 @@ import sys
 import threading
 import uuid
 
+from .agent_objects import for_agent
 from .backend import make_backend
 from harness import agent_host
 from services.benchmarks import ALL_ROBOT_TOOLS, for_config as benchmark_for
@@ -336,7 +337,10 @@ class ResearchFrontend:
         self.api.revoke()
         self.s.close()
 
-    def handle(self, request):
+    def handle(self, request, client=None):
+        """One JSON-RPC request. `client` is the transport's state for this connection;
+        `initialize` records its name there, and every connection but Python's is the agent
+        (agent_objects.for_agent). None (internal callers) means full replies."""
         if not isinstance(request, dict):
             return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         ident = request.get('id')
@@ -345,6 +349,9 @@ class ResearchFrontend:
                 raise ValueError('Invalid JSON-RPC')
             method = request.get('method')
             if method == 'initialize':
+                if client is not None:
+                    info = (request.get('params') or {}).get('clientInfo') or {}
+                    client['name'] = info.get('name') if isinstance(info, dict) else None
                 result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}},
                           'serverInfo': {'name': 'auto-research', 'version': '3.0'}}
             elif method == 'notifications/initialized':
@@ -354,7 +361,9 @@ class ResearchFrontend:
             elif method == 'tools/call':
                 params = request['params']
                 try:
-                    result = self.call(params['name'], params.get('arguments', {}))
+                    name, arguments = params['name'], params.get('arguments', {})
+                    result = for_agent(name, arguments, lambda given: self.call(name, given), client,
+                                       bench=self.contract.bench, geometry=self.contract.observation.geometry)
                 except (Exception, ExecutionDeadline) as exc:
                     if isinstance(exc, ExecutionDeadline):
                         # A lifecycle wall limit (environment startup, evaluation) is a timeout of
@@ -388,7 +397,7 @@ class ResearchFrontend:
         listener.setblocking(False)
         with selectors.DefaultSelector() as poll:
             poll.register(listener, selectors.EVENT_READ)
-            buffers = {}
+            buffers, clients = {}, {}
             try:
                 while True:
                     for key, _ in poll.select():
@@ -403,6 +412,7 @@ class ResearchFrontend:
                                 continue
                             client.setblocking(False)
                             buffers[client] = bytearray()
+                            clients[client] = {}
                             poll.register(client, selectors.EVENT_READ)
                             continue
                         try:
@@ -422,7 +432,7 @@ class ResearchFrontend:
                                     response = {'jsonrpc': '2.0', 'id': None,
                                         'error': {'code': -32700, 'message': 'Invalid request'}}
                                 else:
-                                    response = self.handle(request)
+                                    response = self.handle(request, clients[connection])
                                 if response is not None:
                                     connection.settimeout(5)
                                     connection.sendall(json.dumps(response, allow_nan=False).encode() + b'\n')
@@ -430,12 +440,14 @@ class ResearchFrontend:
                         except (ConnectionError, OSError):
                             poll.unregister(connection)
                             buffers.pop(connection, None)
+                            clients.pop(connection, None)
                             connection.close()
             finally:
                 for client in buffers:
                     client.close()
 
     def serve(self, reader, writer):
+        client = {}
         while line := reader.readline(MAX_REQUEST_BYTES + 1):
             if len(line.encode('utf-8')) > MAX_REQUEST_BYTES:
                 writer.write(json.dumps({'jsonrpc': '2.0', 'id': None,
@@ -443,7 +455,7 @@ class ResearchFrontend:
                 writer.flush()
                 return  # Do not interpret the remaining fragment as another request.
             try:
-                response = self.handle(json.loads(line))
+                response = self.handle(json.loads(line), client)
             except Exception:
                 response = {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'Invalid request'}}
             if response is not None:
