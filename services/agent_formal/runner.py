@@ -19,7 +19,8 @@ import time
 
 from harness import agent_host
 from services.agent_formal import code_runs
-from services.controller.agent_view import PYTHON_CLIENT, agent_view
+from services.controller.agent_objects import for_agent
+from services.controller.agent_view import PYTHON_CLIENT
 from services.controller.errors import public_failure
 from services.controller.gemini import MAX_REQUEST_BYTES
 from services.controller.sandbox import ExecutionDeadline, deadline, finalize_within, time_left, wall_end
@@ -94,14 +95,33 @@ class FormalMCP:
                      'episode_ended': bool(self.gateway.terminal)}
             return {'jsonrpc': '2.0', 'id': request.get('id'),
                     'result': {'content': [{'type': 'text', 'text': json.dumps(value)}]}}
+        if request.get('method') == 'tools/call' and client is not None and client.get('name') != PYTHON_CLIENT:
+            return self._agent_call(request, params, client)
         response = self.gateway.handle(self.token, request)
         if request.get('method') == 'tools/list' and isinstance(response, dict) and 'result' in response:
             response['result']['tools'] = [status_tool(), *response['result']['tools']]
-        if (request.get('method') == 'tools/call' and client is not None and client.get('name') != PYTHON_CLIENT
-                and isinstance(response, dict) and 'result' in response
-                and self.gateway.contract.bench.depth_in_python_only):
-            response = {**response, 'result': agent_view(response['result'])}
         return response
+
+    def _agent_call(self, request, params, client):
+        """The copy's own tool call, through agent_objects.for_agent like the frontend's."""
+        last = {}
+
+        class Failed(Exception):
+            pass
+
+        def call(arguments):
+            last['response'] = self.gateway.handle(
+                self.token, {**request, 'params': {**params, 'arguments': arguments}})
+            if not isinstance(last['response'], dict) or 'result' not in last['response']:
+                raise Failed()
+            return last['response']['result']
+        contract = self.gateway.contract
+        try:
+            result = for_agent(params.get('name'), params.get('arguments') or {}, call, client,
+                               bench=contract.bench, geometry=contract.observation.geometry)
+        except Failed:
+            return last['response']
+        return {**last['response'], 'result': result}
 
 
 class AgentRunner:

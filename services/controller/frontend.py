@@ -12,7 +12,7 @@ import sys
 import threading
 import uuid
 
-from .agent_view import PYTHON_CLIENT, agent_view
+from .agent_objects import for_agent
 from .backend import make_backend
 from harness import agent_host
 from services.benchmarks import ALL_ROBOT_TOOLS, for_config as benchmark_for
@@ -339,8 +339,8 @@ class ResearchFrontend:
 
     def handle(self, request, client=None):
         """One JSON-RPC request. `client` is the transport's state for this connection;
-        `initialize` records its name there, and every connection but Python's gets
-        agent_view replies. None (internal callers) means full replies."""
+        `initialize` records its name there, and every connection but Python's is the agent
+        (agent_objects.for_agent). None (internal callers) means full replies."""
         if not isinstance(request, dict):
             return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         ident = request.get('id')
@@ -361,7 +361,9 @@ class ResearchFrontend:
             elif method == 'tools/call':
                 params = request['params']
                 try:
-                    result = self.call(params['name'], params.get('arguments', {}))
+                    name, arguments = params['name'], params.get('arguments', {})
+                    result = for_agent(name, arguments, lambda given: self.call(name, given), client,
+                                       bench=self.contract.bench, geometry=self.contract.observation.geometry)
                 except (Exception, ExecutionDeadline) as exc:
                     if isinstance(exc, ExecutionDeadline):
                         # A lifecycle wall limit (environment startup, evaluation) is a timeout of
@@ -376,9 +378,6 @@ class ResearchFrontend:
                         failure['audit_recording_failed'] = True
                     result = {'isError': True, 'content': [{'type': 'text',
                         'text': json.dumps({'error': failure})}]}
-                if (client is not None and client.get('name') != PYTHON_CLIENT
-                        and self.contract.bench.depth_in_python_only):
-                    result = agent_view(result)
                 if self.stopping and threading.current_thread() is threading.main_thread():
                     raise SystemExit(0)  # The stop arrived during this call; serve nothing further.
             else:
