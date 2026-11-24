@@ -49,6 +49,9 @@ class Benchmark:
     # Live copies of a code-mode session get reports of its code's formal runs (replayed frames,
     # reviews; services/agent_formal/code_runs.py).
     code_run_reports: bool = False
+    # Depth images and robot spheres reach Python callers only; the agent CLI gets RGB, the
+    # JSON and a sphere count (services/controller/agent_view.py).
+    depth_in_python_only: bool = False
     # Planning and stepping sources (project-relative) an offline parallel formal batch
     # fingerprints, so a change to them during the batch stops it.
     planner_files: tuple = ()
@@ -127,6 +130,7 @@ BENCHMARKS = {
         setup_defaults={'formal_episodes': 50, 'formal_workers': 4, 'formal_eval_seed': 1,
                         'exploration_start_seed': 1, 'demonstration_context': 'terminal_state'},
         fixed={'episode_reviews': ('off', 'Episode reviews read the BEHAVIOR simulator ground truth; RoboDojo has none.')},
+        depth_in_python_only=True,
     ),
     'behavior': Benchmark(
         name='behavior', label='BEHAVIOR', adapter='services.behavior.benchmark',
