@@ -70,6 +70,25 @@ def tcp_from_link6(position, rotation):
             rotation[:, APPROACH_AXIS].copy(), rotation[:, CLOSING_AXIS].copy())
 
 
+def _rotation_wxyz(quaternion):
+    w, x, y, z = np.asarray(quaternion, dtype=np.float64) / np.linalg.norm(quaternion)
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                     [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                     [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def tcp_positions(positions, quaternions_wxyz):
+    """Each arm's TCP (the point between the finger pads) from its link6 pose, in metres;
+    None for an arm whose pose is not finite or whose quaternion is zero."""
+    result = []
+    for position, quaternion in zip(np.asarray(positions, dtype=np.float64).reshape(-1, 3),
+                                    np.asarray(quaternions_wxyz, dtype=np.float64).reshape(-1, 4)):
+        valid = np.isfinite(position).all() and np.isfinite(quaternion).all() and np.linalg.norm(quaternion) > 1e-6
+        result.append(np.round(tcp_from_link6(position, _rotation_wxyz(quaternion))[0], 4).tolist()
+                      if valid else None)
+    return result
+
+
 def opening_gap_m(opening):
     """The finger gap (m) of a gripper opening reading (0 closed, 1 open)."""
     return float(np.clip(opening, 0.0, 1.0)) * STROKE_M

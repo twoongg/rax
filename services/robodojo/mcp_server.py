@@ -117,6 +117,16 @@ def _png_data(value: Any) -> str:
     return base64.b64encode(stream.getvalue()).decode("ascii")
 
 
+def _tcp_positions(observation: dict[str, Any]) -> list | None:
+    """Each arm's TCP (between the finger pads) from its measured link6 pose."""
+    from services.robodojo.gripper import tcp_positions
+
+    positions, quaternions = observation.get("eef_positions"), observation.get("eef_quaternions_wxyz")
+    if positions is None or quaternions is None:
+        return None
+    return tcp_positions(positions, quaternions)
+
+
 def _depth_png_data(value: Any) -> tuple[str, dict[str, Any]]:
     """Encode distance-to-image-plane meters as lossless uint16 millimeters."""
 
@@ -1235,6 +1245,8 @@ class RoboDojoMCP:
             "states": _jsonable(observation.get("states")),
             "eef_positions": _jsonable(observation.get("eef_positions")),
             "eef_quaternions_wxyz": _jsonable(observation.get("eef_quaternions_wxyz")),
+            "tcp_positions": _tcp_positions(observation),
+            "gripper_commands": _jsonable(observation.get("gripper_commands")),
             "environment_origin_world_m": _jsonable(
                 observation.get("environment_origin_world_m")
             ),

@@ -335,6 +335,9 @@ class RoboDojoSession:
             states=states,
             eef_positions=poses[:, :3],
             eef_quaternions_wxyz=poses[:, 3:],
+            # The last executed gripper commands (left, right); before any, the measured openings.
+            gripper_commands=(np.asarray(states, dtype=np.float32)[[6, 13]]
+                              if self._commanded_grippers is None else self._commanded_grippers.copy()),
             environment_origin_world_m=environment_origin,
             instruction=raw["instruction"],
             total_interaction_steps=self.step_id,
