@@ -839,7 +839,7 @@ class RoboDojoMCP:
                         "robot_spheres": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Also return robot_spheres: spheres covering the robot's own body at the measured joints, from its URDF meshes (fingers over their full stroke), as [x, y, z, radius] in the environment frame. Use them to remove the robot from depth points. Python callers (ctx.call) get the spheres and the depth images; a direct call by the agent gets the RGB images and a sphere count.",
+                            "description": "Also return robot_spheres: spheres covering the robot's own body at the measured joints, from its URDF meshes (fingers over their full stroke), as [x, y, z, radius] in the environment frame. Use them to remove the robot from depth points. Python callers (ctx.call) get the spheres and the depth images; a direct call by the agent gets the RGB images, a sphere count and the objects on the table with ids (objects, object_notes).",
                         },
                     },
                     "additionalProperties": False,

@@ -50,9 +50,11 @@ autonomous controller.
    sequence of manipulation stages.
 {% endif %}
 {% if robodojo and camera_geometry %}
-4. Find the objects with `objects()` of [point-cloud](../point-cloud/SKILL.md) and
-   plan the grasp with [grasp-planning](../grasp-planning/SKILL.md), checking every
-   pose with `robodojo_ik`. Choose a small, inspectable action chunk, and pick the
+4. Find the objects and their ids in the `objects` of your `{{ robot.observe }}`
+   ([point-cloud](../point-cloud/SKILL.md)) and plan the grasp with
+   [grasp-planning](../grasp-planning/SKILL.md), checking every pose with `robodojo_ik`.
+   Observe again after each grasp and after each release, with the gripper backed off,
+   and read `object_notes`. Choose a small, inspectable action chunk, and pick the
    motion tool for it as [robot-interface](../robot-interface/SKILL.md) describes.
    Use [object-localization](../object-localization/SKILL.md) for a single point or a
    feature too small to be an object.

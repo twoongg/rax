@@ -44,6 +44,15 @@ yourself, you see the RGB images, the measured state and a count of the spheres,
 the depth or the sphere numbers; this helper reads both from a reply that Python got
 with `ctx.call`.
 
+Your own `robodojo_observe` also runs `objects()` with robot spheres for you. Its
+`objects` rows give each object an `id` that stays with it through the episode, its
+`label`, `centre_m` (the centre of its top face), `top_z_m`, `size_m` (long side, short
+side, height) and `yaw_deg`. `object_notes` say what moved and how far, what a gripper
+holds, what was found again and what is not seen. An object in a gripper is not listed
+while held; after its release, back the gripper off by at least 3 cm before you observe,
+or the cut near the gripper changes its size. Python replies carry no `objects`: call
+`objects()` there yourself.
+
 {% if formal_episode %}
 Your carried code imports it the same way (`from point_cloud import ...`).
 {% elif agent_formal %}

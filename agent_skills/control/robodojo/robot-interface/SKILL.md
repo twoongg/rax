@@ -7,7 +7,10 @@ description: The dual ARX X5 table-top robot in RoboDojo - which motion tool to 
 
 Two six-joint arms with parallel grippers over a table. End-effector poses are
 absolute `link6` poses in environment-origin metres with unit `[qw, qx, qy, qz]`
-orientation; the live tool schemas give every argument and limit.
+orientation; the live tool schemas give every argument and limit. Replies give the
+measured link6 poses as `eef_positions` and `eef_quaternions_wxyz`, the point between
+the finger pads as `tcp_positions` (about 15 cm further along link6 +x), and the last
+gripper command per arm as `gripper_commands`.
 
 ## Choose the tool to match the objective
 

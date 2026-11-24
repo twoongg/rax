@@ -73,20 +73,25 @@ later session on this task with new layouts.
 {% if robodojo and camera_geometry %}
    Work in this order. Each step names the skill to read before you do it.
    1.1 Write the completion checklist from `TASK.md` in `memory/PROGRESS.md`.
-   1.2 Find the objects in Python, with `point_cloud.py` copied into
-       `code/<project>/`: `objects(observation(ctx.call("robodojo_observe",
-       robot_spheres=True)))` lists every object with its centre, size, top height and
-       yaw ([point-cloud](.agents/skills/point-cloud/SKILL.md)). Save an `overlay` PNG
-       and check that it covers the object. Depth reaches Python only; your direct
-       `robodojo_observe` calls show the RGB images.
+   1.2 Find the objects: call `robodojo_observe`. Its `objects` list gives each object
+       an id that stays with it for the episode, with its centre, size and yaw, and
+       `object_notes` say what moved, what a gripper holds and what was found again
+       ([point-cloud](.agents/skills/point-cloud/SKILL.md)). For overlays, segments and
+       positions on an object, use `point_cloud.py` in Python, copied into
+       `code/<project>/`. Depth reaches Python only.
    1.3 Plan the grasp, carry and place before moving
        ([grasp-planning](.agents/skills/grasp-planning/SKILL.md)): build each link6 pose
        from where the gripper's centre goes, check every pose of the plan in one
-       `robodojo_ik` call, and use only a plan whose poses are all `ok`.
+       `robodojo_ik` call, and use only a plan whose poses are all `ok`. Every reply
+       gives the gripper's centre as `tcp_positions`; `eef_positions` is link6, about
+       15 cm behind it.
    1.4 Move with `robodojo_free_space_move`
        ([free-space-move](.agents/skills/free-space-move/SKILL.md)). After closing the
-       gripper, check the grip with `grip` and `verify` of `grasp.py`, lift 1.5 cm,
-       check again, and only then carry.
+       gripper, check the grip with `grip` and `verify` of `grasp.py`, lift 1.5 cm, and
+       call `robodojo_observe`: `object_notes` should say that gripper holds the object.
+       Only then carry. After each release, lift or back the gripper off by at least
+       3 cm, call `robodojo_observe`, and compare where the object is and how it is
+       turned with what you wanted before you grasp it again.
    1.5 Call `evaluate`. If it is false, observe, find the objects again (1.2) and fix
        the condition that fails.
 {% endif %}

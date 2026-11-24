@@ -226,6 +226,13 @@ bundles and recordings get the whole reply. The frontend and agent formal's endp
 tell the connections apart by the name each one sends in `initialize`
 (`services/controller/agent_view.py`).
 
+The agent's own `robodojo_observe` runs with robot spheres, and the frontend lists the
+objects in it with the point-cloud skill's own `objects()`. An `ObjectTracker` per
+connection and environment keeps their ids through the episode with AMP's matching
+rules, and `object_notes` say what moved, is held, was found again or is not seen
+(`services/controller/agent_objects.py`, `object_tracking.py`). Every reply also carries
+`tcp_positions` and `gripper_commands`.
+
 The gateway removes native reward, score, intermediate success, seeds, layout IDs and
 host paths from every reply. An ended episode discloses only `episode_ended` and the
 binary `task_complete`.

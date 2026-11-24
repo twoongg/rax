@@ -9,7 +9,9 @@ description: Use before a RoboDojo arm grasps, carries, turns or places an objec
 
 - Robot poses are `link6` poses. The gripper holds at its tool centre point (TCP), the
   point between the finger pads: 15.0 cm along link6's +x axis
-  (`TCP = link6 + R · [0.150, 0, -0.0014]`).
+  (`TCP = link6 + R · [0.150, 0, -0.0014]`). Every robot reply gives it as
+  `tcp_positions`, beside `eef_positions` (link6), and the last gripper command per arm
+  as `gripper_commands`.
 - link6 +x is the **approach** axis, the direction the gripper points out between the
   fingers. link6 +y is the **closing** axis, along which the fingers close.
 - The fingertips reach 7.5 mm past the TCP along the approach axis.
