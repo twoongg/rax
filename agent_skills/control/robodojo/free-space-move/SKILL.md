@@ -18,8 +18,9 @@ the measured result after execution.
 2. Build a complete environment-origin `link6` pose. Use
    [pose math](../pose-math/SKILL.md) for frame-aware changes and
    `format_target(target_kind="free_space_move")`.
-3. Move only the selected arm. Omitting its gripper opening preserves the measured
-   opening at plan start. Let the formatter and live MCP schema supply the exact
+3. Move only the selected arm. Omitting its gripper opening keeps the opening last
+   commanded for it, so a gripper closed on an object stays closed; the other arm keeps
+   its last command too. Let the formatter and live MCP schema supply the exact
    target fields; EEF stepping and free-space targets are not interchangeable.
 
 The planner models robot self-collision and a static table. It does not receive

@@ -1066,7 +1066,7 @@ class RoboDojoMCP:
                                     "type": "number",
                                     "minimum": 0,
                                     "maximum": 1,
-                                    "description": "Optional target opening; omission holds the measured opening from plan start.",
+                                    "description": "Optional target opening; omission keeps the arm's last commanded opening, so a gripper closed on an object stays closed. The other arm keeps its last commanded opening too.",
                                 },
                             },
                         },

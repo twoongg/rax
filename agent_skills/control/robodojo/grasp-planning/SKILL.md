@@ -84,6 +84,12 @@ points of the other objects from point-cloud's `objects()`.
    - the object rises with the gripper in the wrist and high views.
 3. Lift fully only after that. Otherwise open, back off and grasp again.
 
+While carrying, keep commanding the gripper closed (opening 0). The measured opening of a
+held object (say 0.56) is where the fingers stopped, not a command: sent back as
+`gripper_opening`, it ends the squeeze and the object slips out. `robodojo_free_space_move`
+without `gripper_opening` keeps the last command; `robodojo_step_eef` needs
+`gripper_closed: true` on every waypoint, for the holding arm too.
+
 ## Python
 
 {% if formal_episode %}

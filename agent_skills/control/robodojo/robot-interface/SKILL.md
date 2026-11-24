@@ -31,7 +31,10 @@ orientation; the live tool schemas give every argument and limit.
 
 Supply absolute dual-arm waypoints. Format each arm separately with
 [pose-math](../pose-math/SKILL.md), then assemble the pair using the live tool schema.
-Hold an inactive arm at its measured pose and preserve its measured gripper opening.
+Hold an inactive arm at its measured pose and keep its gripper at what you last
+commanded. A gripper closed on an object stops part-way (its measured opening might
+read 0.56); command it closed (`gripper_closed: true`) while it holds the object,
+never that measured opening, which ends the squeeze and drops the object.
 
 Each waypoint produces one bounded IK update from the **measured state after the
 previous waypoint**, not from the previous requested pose. Solver limits bound

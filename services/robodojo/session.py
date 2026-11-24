@@ -97,6 +97,7 @@ class RoboDojoSession:
         self.finish_reason = None
         self._motion_plans = OrderedDict()
         self._motion_plan_limit = 16
+        self._commanded_grippers = None  # The last executed (left, right) gripper commands.
         self.native_step_limit = int(env.step_lim)
         require(self.native_step_limit > 0, "Native task step limit must be positive")
         # The legacy setup flag selects episode mode, not whether time is bounded.
@@ -386,6 +387,16 @@ class RoboDojoSession:
         state = np.asarray(self.obs["states"], dtype=np.float32).reshape(14)
         require(np.isfinite(state).all(), "Invalid current state for motion planning")
         return state.copy()
+
+    def _hold_state(self, measured):
+        """The 14D command that holds still: the measured arm joints with each gripper at its
+        last command. Fingers closed on an object stop part-way, so commanding back their
+        measured opening (say 0.56) would end the squeeze and drop the object. Before any
+        command, the measured openings."""
+        hold = np.array(measured, dtype=np.float32).reshape(14)
+        if self._commanded_grippers is not None:
+            hold[[6, 13]] = self._commanded_grippers
+        return hold
 
     def _ensure_curobo_planner(self, arm):
         require(arm in ("left", "right"), f"Invalid motion-planning arm: {arm}")
@@ -688,9 +699,10 @@ class RoboDojoSession:
         target = validate_eef_target(target)
         robot, planner = self._ensure_curobo_planner(arm)
         start_state = self._motion_state()
+        hold_state = self._hold_state(start_state)
         offset = 0 if arm == "left" else 7
         current_joints = start_state[offset : offset + 6]
-        start_opening = float(start_state[offset + 6])
+        start_opening = float(hold_state[offset + 6])
         target_opening = (
             start_opening
             if target.get("gripper_opening") is None
@@ -714,7 +726,7 @@ class RoboDojoSession:
             }
         positions = np.asarray(result.get("position"), dtype=np.float32)
         actions = policy_actions(
-            positions, start_state, arm, target_opening,
+            positions, hold_state, arm, target_opening,
             planner_dt=float(result.get("interpolation_dt")),
             control_dt=self.metadata["control_dt"],
         )
@@ -879,6 +891,7 @@ class RoboDojoSession:
                 int(self.env.take_action_cnt[0]) == before + 1,
                 "Native action was not executed exactly once",
             )
+            self._commanded_grippers = action[[6, 13]].copy()
             self.step_id += 1
             ended = self._update_terminal_state()
             observation = self._observe(record=True)
