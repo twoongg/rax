@@ -228,3 +228,24 @@ def test_parallel_transport_passes_each_connection_state(tmp_path):
         listener.close()
         os.unlink(path)
     assert seen == [('initialize', {'name': 'claude-code'}), ('step', {'name': 'claude-code'}), ('step', {})]
+
+
+def test_formal_copy_endpoint_gives_python_only_the_full_reply():
+    """Agent formal's live copies reach the gateway through their own endpoint."""
+    from services.agent_formal.runner import FormalMCP
+    from services.mcp_contract import Contract
+
+    class Gateway:
+        contract = Contract()  # RoboDojo, rgbd
+        terminal = False
+
+        def handle(self, token, request):
+            return {'jsonrpc': '2.0', 'id': request.get('id'), 'result': observe_reply()}
+
+    endpoint = FormalMCP(Gateway(), 'token', info={})
+    agent, python = {}, {}
+    endpoint.handle(initialize('claude-code'), agent)
+    endpoint.handle(initialize(PYTHON_CLIENT), python)
+    assert len(endpoint.handle(OBSERVE, agent)['result']['content']) == 4
+    assert len(endpoint.handle(OBSERVE, python)['result']['content']) == 7
+    assert len(endpoint.handle(OBSERVE)['result']['content']) == 7
