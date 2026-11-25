@@ -28,6 +28,11 @@ evidence with autonomous-control.
 
 The skill links below are entry points. Read the skill for your current step and follow
 its references when needed rather than reading the entire workspace first.
+{% if skill_library %}
+
+`skill-library/` holds controllers written for earlier tasks on this robot. Before your
+first episode, do step 0 below: start from their code instead of from nothing.
+{% endif %}
 
 {% if multi_env %}
 Exploration runs several parallel environments (`status.exploration`). Read
@@ -53,6 +58,16 @@ later session on this task with new layouts.
 
 ## Workflow
 
+{% if skill_library %}
+0. **Start from the controller library.** Read
+   [skill-library](.agents/skills/skill-library/SKILL.md), then:
+   0.1 Read `skill-library/INDEX.md`, pick at most three entries whose task is nearest to
+       yours, read their cards, and write your choice in `memory/PROGRESS.md`.
+   0.2 Copy the nearest entry's code into `code/<project>/` and run it once in an
+       exploration episode before writing new code. Note in `memory/PROGRESS.md` how far
+       it got and where it stopped.
+   Then do step 1 with what the copied code already does as your starting point.
+{% endif %}
 {% if demonstrations %}
 1. **Understand and solve the task yourself.** Read
    [manual-robot-control](.agents/skills/manual-robot-control/SKILL.md), and
@@ -134,6 +149,11 @@ later session on this task with new layouts.
    Write `handoff/README.md` as
    [transfer-handoff](.agents/skills/transfer-handoff/SKILL.md) describes.
 {% endif %}
+{% if skill_library %}
+   Keep `code/<project>/SKILL.md` current as
+   [skill-library](.agents/skills/skill-library/SKILL.md) step 3 says: when exploration
+   ends, your project and its card join the library for later tasks.
+{% endif %}
 
 When no exploration episode remains and none is live, `status.next_step` gives your
 last steps: update the notes{% if carries_handoff %} and handoff{% endif %}, then end your turn. If something the task
@@ -145,6 +165,11 @@ success.
    `controller.py:main(ctx)`, the modules it imports and its data files under
    `code/<project>/`. Rehearsals and the formal batch run this frozen
    controller alone, against the context they supply, as autonomous-control shows.
+{% if skill_library %}
+   Before registering the bundle you will submit, write `code/<project>/SKILL.md` as
+   [skill-library](.agents/skills/skill-library/SKILL.md) step 3 says, so the bundle
+   carries it.
+{% endif %}
    `register(source=...)` freezes the directory, and `rehearse(bundle=...)` runs that
    bundle end to end as a fresh process in a fresh exploration episode, without
    you. Inspect the returned evaluation and logs, not just the exit code. Fix failures

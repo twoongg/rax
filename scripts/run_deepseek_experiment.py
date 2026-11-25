@@ -47,6 +47,8 @@ def main():
     parser.add_argument('--episodes', type=int, default=16)
     parser.add_argument('--formal-episodes', type=int)
     parser.add_argument('--record', type=Path, required=True)
+    parser.add_argument('--skill-library', type=Path,
+                        help='Controller library copied into the agent workspace (services/skill_library.py)')
     args = parser.parse_args()
     if args.backend == 'claude' and args.provider not in ('openrouter', 'custom'):
         parser.error('The native DeepSeek authentication modes require --backend dsh')
@@ -78,6 +80,8 @@ def main():
         configure += ['--formal-episodes', str(args.formal_episodes)]
     if args.image:
         configure += ['--image', args.image]
+    if args.skill_library:
+        configure += ['--skill-library', str(args.skill_library)]
     output = subprocess.check_output(configure, cwd=PROJECT, text=True)
     config = Path(output.strip().splitlines()[-1])
     if not config.is_file():

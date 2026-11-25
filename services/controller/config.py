@@ -113,6 +113,9 @@ class Configuration:
     # adaptation_context is 'clear', its conversation.
     adaptation_source: str | None = None
     adaptation_context: str = 'compact'  # resume | compact | clear
+    # A controller library (services/skill_library.py) copied into the exploring agent's
+    # workspace as skill-library/, with the skill-library skill; None gives no library.
+    skill_library: str | None = None
     # Simulator benchmark (services/benchmarks.py). Configurations without it are RoboDojo.
     benchmark: str = 'robodojo'
 
