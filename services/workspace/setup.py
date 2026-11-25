@@ -28,6 +28,9 @@ class Setup:
     # The open-weight model behind gemini_generate when the session serves its own
     # (Configuration.perception_model); None for Gemini on OpenRouter.
     perception_model: str | None = None
+    # The exploring agent's workspace holds a controller library at skill-library/
+    # (Configuration.skill_library); it gets the skill-library skill and AGENTS.md steps.
+    skill_library: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, 'options', frozenset(self.options))
@@ -66,6 +69,8 @@ class Setup:
             'perception_model': self.perception_model,
             'perception_name': (f'{self.perception_model} (an open-weight model)' if self.perception_model
                                 else 'Gemini 3.8 Flash'),
+            # A controller library is copied into the workspace (never for a formal copy).
+            'skill_library': self.skill_library and not formal_episode,
             'demonstrations': self.demonstrations,
             'demonstration_kind': self.demonstration_kind if self.demonstrations else None,
             # One image: text says "image", not "images".

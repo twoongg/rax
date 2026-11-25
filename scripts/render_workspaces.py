@@ -89,13 +89,17 @@ def demonstration_context(demonstrations):
 
 
 def auto_research(target, *, profile='rgbd', envs=1, subagents=0, agent_formal=False, claude=False, handoff=False,
-                  benchmark=None, demonstrations=False):
+                  benchmark=None, demonstrations=False, library=False):
     from harness.codex_cli import auto_research as module
+    from services.skill_library import SEED
     config = configuration(target.parent/'root', **BENCHMARK_CASES.get(benchmark, {}),
                            observation_profile=profile, exploration_envs=envs,
                            subagents=subagents, agent_formal=agent_formal, write_handoff=handoff,
                            agent_cli='claude' if claude else 'codex',
                            agent_provider='claude-login' if claude else 'openrouter',
+                           # The seed controller library, as a session prepared with --skill-library gets it.
+                           skill_library=str(SEED) if library else None,
+                           library_sequence='golden' if library else None, library_step='1/6' if library else None,
                            **demonstration_context(demonstrations))
     target.mkdir()
     provision = module.provision_demonstration
@@ -155,6 +159,12 @@ def cases():
         auto_research, dict(demonstrations='completion_sequence'))
     result['auto-research/formal-copy-demonstrations/rgbd'] = (formal_copy, dict(demonstrations=True))
     result['auto-research/formal-copy-claude/rgbd'] = (formal_copy, dict(claude=True))
+    # A controller library in the workspace (--skill-library): code mode, live copies, RGB-only.
+    result['auto-research/skill-library/rgbd/env1-sub0'] = (auto_research, dict(library=True, claude=True))
+    result['auto-research/skill-library-agent-formal/rgbd/env1-sub0'] = (
+        auto_research, dict(library=True, claude=True, agent_formal=True))
+    result['auto-research/skill-library/rgb-only/env1-sub0'] = (
+        auto_research, dict(profile='rgb-only', library=True, demonstrations=True))
     # BEHAVIOR sessions are RGB-D only (the challenge-track observations).
     result['behavior/auto-research/exploration/rgbd/env1-sub0'] = (auto_research, dict(benchmark='behavior'))
     result['behavior/auto-research/agent-formal/rgbd/env1-sub0'] = (auto_research, dict(agent_formal=True, benchmark='behavior'))
@@ -209,6 +219,10 @@ def index(tree):
     for path in sorted(tree.rglob('*')):
         relative = path.relative_to(tree).as_posix()
         if '__pycache__' in path.parts:
+            continue
+        if relative.startswith('skill-library/skills/') and '/code/' in relative:
+            # A library entry's code is data copied whole; a server's seed may add modules
+            # (make-kong's robodojo_toolkit.py). Cards, TASK.md and the index stay covered.
             continue
         if path.is_symlink():
             target = os.readlink(path)

@@ -45,6 +45,9 @@ def retire_fields(value):
     # Sessions saved before a perception server could be named used Gemini on OpenRouter.
     value.setdefault('perception_url', None)
     value.setdefault('perception_model', None)
+    # Library sessions saved before a library came only with its sequence and step.
+    if value.get('skill_library') and not value.get('library_sequence'):
+        value['library_sequence'], value['library_step'] = 'unnamed', '1/1'
     return value
 
 
@@ -113,6 +116,13 @@ class Configuration:
     # adaptation_context is 'clear', its conversation.
     adaptation_source: str | None = None
     adaptation_context: str = 'compact'  # resume | compact | clear
+    # Library sequence research (scripts/run_skill_library_sequence.py): this session is step
+    # library_step ('2/6') of the sequence library_sequence, and its exploring agent gets the
+    # controller library skill_library (services/skill_library.py) as skill-library/. The three
+    # go together; without them the session is single-task research.
+    skill_library: str | None = None
+    library_sequence: str | None = None
+    library_step: str | None = None
     # Simulator benchmark (services/benchmarks.py). Configurations without it are RoboDojo.
     benchmark: str = 'robodojo'
 
@@ -167,6 +177,16 @@ class Configuration:
             raise ValueError(f'{self.agent_cli} currently supports code formal, one exploration environment, no adaptation or subagents')
         if self.agent_effort not in AGENT_EFFORTS:
             raise ValueError(f'agent_effort must be one of {AGENT_EFFORTS}')
+        library = (self.skill_library, self.library_sequence, self.library_step)
+        if any(library) and not all(library):
+            raise ValueError('skill_library, library_sequence and library_step go together: a library session is '
+                             'one step of a library sequence (scripts/run_skill_library_sequence.py)')
+        if self.library_step is not None:
+            step, _, steps = str(self.library_step).partition('/')
+            if not (step.isdigit() and steps.isdigit() and 1 <= int(step) <= int(steps)):
+                raise ValueError("library_step must be 'K/N' with 1 <= K <= N")
+        if self.skill_library and self.adaptation_source:
+            raise ValueError('A library session starts a fresh agent; it cannot continue an adaptation source')
         if self.demonstration_context not in DEMONSTRATION_CONTEXTS:
             raise ValueError('Invalid demonstration_context')
         from services.transfer import CONTEXTS, validate_parts

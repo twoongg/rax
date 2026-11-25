@@ -36,7 +36,9 @@ running; otherwise it is review-only, so resume it from the terminal.
   the form, and fields that do not apply are fixed, with the reason as a tooltip. The
   form remembers the last prepared settings (`runtime/operator/auto-research.json`).
   Preparing a Claude `claude-login` session first checks the experiment token.
-- **Session:** stage, exploration used, manual success, formal success and average
+- **Session:** research kind (`single task`, or `library sequence <name> · task K/N` for
+  sessions made by `scripts/run_skill_library_sequence.py`, also shown in the session list),
+  stage, exploration used, manual success, formal success and average
   score, live-copy results, agent tokens (main agent and subagents), Gemini spend, the
   agent CLI and provider, and subagent counts. Below them:
   - the terminal launch command, to copy;
@@ -44,6 +46,11 @@ running; otherwise it is review-only, so resume it from the terminal.
   - **Resume:** relaunches a stopped, exited, failed or crashed session in its own
     conversation, headless;
   - **Stop:** signals the session's launcher, as `scripts/stop_auto_research_agent.sh`.
+- **Controller library:** only for sessions prepared with `--skill-library`. It shows every
+  entry the library holds now, oldest first: the seed, then one per finished task, with its
+  task, formal score, when it was added and where it came from. Each row is marked as given
+  to this session at start, added by this session, or added later. The note names the
+  library commit the session got and the current one.
 - **Live cameras:** the latest saved camera frames of the running episode. The dashboard
   reads saved files and never calls the robot.
 - **Trajectory videos:** every simulator episode (exploration, rehearsal, formal and

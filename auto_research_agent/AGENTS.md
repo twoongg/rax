@@ -1,6 +1,13 @@
 # {{ robot.benchmark }} auto-research
 
-{% if agent_formal %}
+{% if agent_formal and skill_library %}
+Your goal is to learn to complete the configured robot task on layouts you have not
+seen: satisfy every condition in `TASK.md`. Start from the controller library: run the
+nearest earlier controller, change it until it does as much of the task as it can, and
+practise controlling the robot yourself together with it. Later you continue from what
+you keep, in new episodes on new layouts: the controller does what it covers and you
+handle the rest.
+{% elif agent_formal %}
 Your goal is to learn to complete the configured robot task on layouts you have not
 seen: satisfy every condition in `TASK.md`. Solve it by hand first, then build an
 automated code controller that does as much of the task as it can, and practise
@@ -11,6 +18,12 @@ handle the rest.
 Those later episodes are what counts: each is one live attempt on a new layout, with no
 reset or retry, scored with partial credit as `TASK.md` Scoring describes.
 {% endif %}
+{% elif skill_library %}
+Your goal is an autonomous controller that completes the configured robot task without
+live intervention: satisfy every condition in `TASK.md`. Start from the controller
+library: run the nearest earlier controller and change what this task needs, working out
+by hand only the parts the code does not do yet. The final evaluation is the formal
+batch: your submitted code run alone on held-out layouts.
 {% else %}
 Your goal is an autonomous controller that completes the configured robot task without
 live intervention: satisfy every condition in `TASK.md`. Solve the task by hand first to
@@ -22,9 +35,16 @@ submitted code run alone on held-out layouts.
 
 Read `TASK.md`, then any existing `memory/PROGRESS.md` and `memory/INDEX.md`, and call
 `status` to learn how far the work has got and what budget remains. Do not start a new
+{% if skill_library %}
+episode merely because the conversation resumed. This session started fresh for this
+task: earlier tasks left only the controller library in `skill-library/`, not their
+notes or conversations. If `memory/PROGRESS.md` records no library entry yet, begin
+with step 0 below; otherwise continue from the step it records.
+{% else %}
 episode merely because the conversation resumed. If manual success is not yet
 confirmed, begin with step 1 below; if it is, continue development from the saved
 evidence with autonomous-control.
+{% endif %}
 
 The skill links below are entry points. Read the skill for your current step and follow
 its references when needed rather than reading the entire workspace first.
@@ -53,7 +73,27 @@ later session on this task with new layouts.
 
 ## Workflow
 
-{% if demonstrations %}
+{% if skill_library %}
+0. **Start from the controller library.** Read
+   [skill-library](.agents/skills/skill-library/SKILL.md), then:
+   0.1 Read `skill-library/INDEX.md`, pick at most three entries whose task is nearest to
+       yours, read their cards, and write your choice in `memory/PROGRESS.md`.
+   0.2 Copy the nearest entry's code into `code/<project>/` and run it once in an
+       exploration episode before writing new code. Note in `memory/PROGRESS.md` how far
+       it got and where it stopped.
+   0.3 Compare that with `TASK.md`: write in `memory/PROGRESS.md` which conditions the
+       copied code already meets and which phases must change for this task. Steps 1
+       and 2 work on those phases only.
+{% endif %}
+{% if skill_library %}
+1. **Work out by hand what the copied code does not do.** Read
+   [manual-robot-control](.agents/skills/manual-robot-control/SKILL.md){% if demonstrations %}, and
+   [in-context-action-learning](.agents/skills/in-context-action-learning/SKILL.md)
+   for the supplied {{ 'demonstration image' if one_demonstration_image else 'demonstrations' }}{% endif %}.
+   For each phase step 0.3 listed, find in the current layout what makes it meet its
+   conditions in `TASK.md`. The copied code does the rest: you need not solve the whole
+   task by hand before changing the code.
+{% elif demonstrations %}
 1. **Understand and solve the task yourself.** Read
    [manual-robot-control](.agents/skills/manual-robot-control/SKILL.md), and
    [in-context-action-learning](.agents/skills/in-context-action-learning/SKILL.md)
@@ -68,8 +108,12 @@ later session on this task with new layouts.
    If details are unclear in the {{ robot.overview }} view, use
    [wrist-camera-inspection](.agents/skills/wrist-camera-inspection/SKILL.md) to move
    an empty arm's wrist camera closer. Control the robot directly through the MCP
+{% if skill_library %}
+   tools, and confirm each fixed phase with `evaluate` or native `task_complete: true`.
+{% else %}
    tools, and confirm success with `evaluate` or native `task_complete: true` before
    automating.
+{% endif %}
 {% if robodojo and camera_geometry %}
    Work in this order. Each step names the skill to read before you do it.
    1.1 Write the completion checklist from `TASK.md` in `memory/PROGRESS.md`.
@@ -95,13 +139,27 @@ later session on this task with new layouts.
    1.5 Call `evaluate`. If it is false, observe, find the objects again (1.2) and fix
        the condition that fails.
 {% endif %}
-{% if agent_formal %}
+{% if agent_formal and skill_library %}
+2. **Change the copied controller for this task.** Read
+   [autonomous-control](.agents/skills/autonomous-control/SKILL.md) and its section
+   "Code you can supervise". Replace what is tied to the earlier task (object finding,
+   positions, the card's task-specific constants) with observation-driven steps that
+   check their preconditions, verify their results and report when they fail or meet
+   a state they were not built for. Keep the parts that work. Automate as much of the
+   task as you can; you handle the rest live.
+{% elif agent_formal %}
 2. **Automate what you did.** Read
    [autonomous-control](.agents/skills/autonomous-control/SKILL.md) and its section
    "Code you can supervise". Turn your decisions into observation-driven steps that
    check their preconditions, verify their results and report when they fail or meet
    a state they were not built for. Automate as much of the task as you can; you
    handle the rest live.
+{% elif skill_library %}
+2. **Change the copied controller for this task.** Read
+   [autonomous-control](.agents/skills/autonomous-control/SKILL.md). Replace what is
+   tied to the earlier task (object finding, positions, the card's task-specific
+   constants) with observation-driven steps for this one, keep the parts that work, and
+   test each change in exploration: functions first, then the full controller.
 {% else %}
 2. **Reproduce your decisions in an autonomous controller.** Read
    [autonomous-control](.agents/skills/autonomous-control/SKILL.md). Build
@@ -134,6 +192,11 @@ later session on this task with new layouts.
    Write `handoff/README.md` as
    [transfer-handoff](.agents/skills/transfer-handoff/SKILL.md) describes.
 {% endif %}
+{% if skill_library %}
+   Keep `code/<project>/SKILL.md` current as
+   [skill-library](.agents/skills/skill-library/SKILL.md) step 3 says: when exploration
+   ends, your project and its card join the library for later tasks.
+{% endif %}
 
 When no exploration episode remains and none is live, `status.next_step` gives your
 last steps: update the notes{% if carries_handoff %} and handoff{% endif %}, then end your turn. If something the task
@@ -145,6 +208,11 @@ success.
    `controller.py:main(ctx)`, the modules it imports and its data files under
    `code/<project>/`. Rehearsals and the formal batch run this frozen
    controller alone, against the context they supply, as autonomous-control shows.
+{% if skill_library %}
+   Before registering the bundle you will submit, write `code/<project>/SKILL.md` as
+   [skill-library](.agents/skills/skill-library/SKILL.md) step 3 says, so the bundle
+   carries it.
+{% endif %}
    `register(source=...)` freezes the directory, and `rehearse(bundle=...)` runs that
    bundle end to end as a fresh process in a fresh exploration episode, without
    you. Inspect the returned evaluation and logs, not just the exit code. Fix failures

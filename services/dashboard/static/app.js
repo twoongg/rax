@@ -353,6 +353,36 @@ function renderResults(session) {
   }));
 }
 
+// A --skill-library session: what the agent was given and what the library holds now
+// (services/skill_library.py), oldest first, so a task sequence shows what has piled up.
+function renderLibrary(session) {
+  const library = session?.skill_library;
+  $('librarySection').hidden = !library;
+  if (!library) return;
+  const short = commit => commit ? commit.slice(0, 8) : '—';
+  text('libraryNote', library.available
+    ? `${library.path}\nGiven at start: ${library.given_count ?? '—'} entries (commit ${short(library.given_commit)}). ` +
+      `Now: ${library.entries.length} entries (commit ${short(library.head)}).`
+    : `${library.path} is not readable from this machine.`);
+  $('libraryRows').replaceChildren(...library.entries.map((entry, index) => {
+    const tr = document.createElement('tr');
+    const role = entry.from_this_session ? 'added by this session' : entry.given ? 'given' : 'added later';
+    const cells = [index + 1, entry.slug, entry.task || '—', entry.formal || 'unknown',
+      entry.added ? entry.added.replace('T', ' ').replace('Z', '') : 'seed', (entry.source || '—').split(' (')[0], role]
+      .map(value => { const td = document.createElement('td'); td.textContent = value; return td; });
+    cells[5].title = entry.source || '';
+    cells[6].className = entry.from_this_session ? 'good' : entry.given ? '' : 'muted';
+    tr.append(...cells);
+    return tr;
+  }));
+}
+
+// Single-task research, or one step of a library sequence (scripts/run_skill_library_sequence.py).
+function researchLabel(research) {
+  if (research?.mode !== 'library sequence') return 'single task';
+  return `library sequence ${research.sequence ?? '?'} · task ${research.step ?? '?'}`;
+}
+
 function agentLabel(agent) {
   if (!agent) return null;
   const effort = agent.effort ? ` · effort ${agent.effort}` : '';
@@ -365,7 +395,8 @@ function agentLabel(agent) {
 function renderResearch() {
   const session = data.selected;
   selected = session?.run_id || '';
-  syncSelect($('run'), data.sessions.length ? data.sessions.map(row => [row.run_id, `${row.task} · ${row.run_id} · ${row.status}`]) : [['', 'No sessions']], runId());
+  syncSelect($('run'), data.sessions.length ? data.sessions.map(row => [row.run_id, `${row.task} · ${row.run_id} · ${row.status}` +
+    (row.research?.mode === 'library sequence' ? ` · ${researchLabel(row.research)}` : '')]) : [['', 'No sessions']], runId());
   const batch = session?.formal_batch, score = batch?.score_summary, gemini = session?.gemini;
   const agentScore = session?.agent_formal_batch?.score_summary;
   const scoreText = summary => summary.average_score_percent != null ? summary.average_score_percent.toFixed(1)+'%'
@@ -373,7 +404,8 @@ function renderResearch() {
       (summary.recorded_average_score_percent != null ? ` (${summary.recorded_average_score_percent.toFixed(1)}% so far)` : '');
   const scoreLabel = benchmarkInfo(session?.task).score_label || 'Formal average score';
   const rows = [
-    ['Task', session?.task], ['Lifecycle', session?.status], ['Stage', session?.stage],
+    ['Task', session?.task], ['Research', session ? researchLabel(session.research) : null],
+    ['Lifecycle', session?.status], ['Stage', session?.stage],
     ['Manual success', session ? String(session.manual_success) : null],
     ['Exploration used', session ? `${session.exploration_used} / ${session.exploration_limit}` : null],
     ['Formal success', batch ? `${batch.success_count} / ${batch.episode_count} (${percent(batch.success_rate)})` : null],
@@ -388,6 +420,9 @@ function renderResearch() {
       gemini ? `Reserved $${gemini.reserved_usd.toFixed(4)}; ${gemini.remaining_usd == null ? 'no session limit' : `remaining $${gemini.remaining_usd.toFixed(3)}`}. Codex costs are separate.` : ''],
     ['Agent', agentLabel(session?.agent)],
     subagentRow(session?.subagents),
+    ...(session?.skill_library ? [['Controller library',
+      `${session.skill_library.given_count ?? '—'} given · ${session.skill_library.entries.length} now`,
+      session.skill_library.path]] : []),
   ];
   stats(rows);
   text('command', session?.command || 'No session selected.', session ? '' : 'muted');
@@ -400,6 +435,7 @@ function renderResearch() {
   text('frontendLog', session?.frontend_log || 'No frontend log yet.');
   text('configuration', JSON.stringify({configuration: session?.configuration, bundles: session?.bundles,
     rehearsed_bundles: session?.rehearsed_bundles, usage: session?.usage}, null, 2));
+  renderLibrary(session);
   renderResults(session);
 }
 

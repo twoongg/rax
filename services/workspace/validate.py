@@ -25,11 +25,17 @@ def prose(path):
     return FENCE.sub(lambda example: '\n' * example.group(0).count('\n'), path.read_text())
 
 
+# Task data copied into a workspace whole, like TASK.md: a controller library's cards name
+# their own tasks and tools (services/skill_library.py).
+DATA_DIRS = ('skill-library',)
+
+
 def markdown(workspace):
     """Markdown files of the workspace itself: links inside it are not followed, but the
     workspace path may lead through links (an agent-storage mount, a linked TMPDIR)."""
     root = Path(workspace)
     return sorted(p for p in root.rglob('*.md') if not p.is_symlink()
+                  and p.relative_to(root).parts[0] not in DATA_DIRS
                   and not any(parent.is_symlink() for parent in p.parents if root in parent.parents))
 
 

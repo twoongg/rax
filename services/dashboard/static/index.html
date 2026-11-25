@@ -50,7 +50,7 @@ th { color: var(--muted); font-weight: 500; }
 .scroll { overflow-x: auto; }
 details > summary { cursor: pointer; color: var(--accent); }
 #message { min-height: 1.4em; }
-#paths, #liveStatus, #liveMetrics, #launchNote { white-space: pre-line; overflow-wrap: anywhere; }
+#paths, #libraryNote, #liveStatus, #liveMetrics, #launchNote { white-space: pre-line; overflow-wrap: anywhere; }
 #run { max-width: 100%; }
 #artifactImage { max-width: 100%; border-radius: 6px; }
 #video { width: 100%; margin-top: 10px; border-radius: 6px; background: #000; }
@@ -119,6 +119,17 @@ details > summary { cursor: pointer; color: var(--accent); }
     </div>
     <p id="launchNote" class="muted"></p>
     <p id="paths" class="mono muted"></p>
+  </section>
+
+  <section id="librarySection" hidden>
+    <h2>Controller library</h2>
+    <p id="libraryNote" class="mono muted"></p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>Entry</th><th>Task</th><th>Formal</th><th>Added</th><th>Source</th><th>This session</th></tr></thead>
+        <tbody id="libraryRows"></tbody>
+      </table>
+    </div>
   </section>
 
   <section>

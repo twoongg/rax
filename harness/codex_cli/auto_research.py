@@ -60,6 +60,7 @@ def populate_workspace(config, workspace, contract=None, *, formal_episode=False
     demonstration = provision_demonstration(config, workspace, PROJECT/'runtime/reference-demos',
                                             record=not formal_episode)
     benchmark = for_config(config)
+    library = getattr(config, 'skill_library', None) and not formal_episode
     built = build(recipe_for(options),
                   Setup(contract or Contract.from_config(config), options, config.task, config.agent_cli,
                         demonstrations=config.demonstration_context != 'none',
@@ -67,7 +68,13 @@ def populate_workspace(config, workspace, contract=None, *, formal_episode=False
                         demonstration_images=demonstration.get('image_count', 0),
                         carries_handoff='handoff' in config.transfer_parts,
                         perception_model=(config.perception_model if config.external_perception
-                                          and getattr(config, 'perception_url', None) else None)), workspace)
+                                          and getattr(config, 'perception_url', None) else None),
+                        skill_library=bool(library)), workspace)
+    if library:
+        # The controller library the agent starts from; the session records which commit it got.
+        from services.skill_library import PROVENANCE, copy_into_workspace
+        persist(config.root/PROVENANCE, {**copy_into_workspace(config.skill_library, workspace),
+                                         'sequence': config.library_sequence, 'step': config.library_step})
     rubric = benchmark.task_context(config, demonstration, live_formal=formal_episode)
     text = rubric + task_demonstration_context(demonstration, live_formal=formal_episode, bundles=not config.agent_formal)
     (workspace/'TASK.md').write_text(text)

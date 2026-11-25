@@ -13,7 +13,7 @@ to a skill of the same name or replaces them, and a layer with no directory is s
 
 | Layer | Contents |
 | --- | --- |
-| `task/` | `manual-robot-control`, `in-context-action-learning`, `experience-memory` |
+| `task/` | `manual-robot-control`, `in-context-action-learning`, `experience-memory`, `skill-library` |
 | `coordination/` | `multi-env-exploration`, `multi-agent-exploration` |
 | `perception/common/` | `wrist-camera-inspection` |
 | `perception/<mode>-<robot>/` | `object-localization` for that mode and robot; `point-cloud` for depth on RoboDojo |
@@ -41,6 +41,7 @@ ARX X5, table-top) or `behavior` (R1Pro, BEHAVIOR-1K). The agent sees one flat
 2. **Apply the role and leave out what the session cannot use:**
    - one environment drops `multi-env-exploration`; no subagents drops
      `multi-agent-exploration`; no demonstration drops `in-context-action-learning`;
+     no controller library (`--skill-library`), or a formal copy, drops `skill-library`;
    - `transfer-handoff` is installed for an adaptation source (`--write-handoff on`) and
      for a live-copy explorer whose copies carry `handoff/`, never for a formal copy;
    - a formal copy takes each `<file>.formal-episode.md` in place of `<file>.md` (other

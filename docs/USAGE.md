@@ -78,6 +78,7 @@ names the reason, for example `--task-rules does not apply to BEHAVIOR sessions:
 | `--write-handoff` | `off` | RoboDojo: install the `transfer-handoff` skill, so this session can be an adaptation source |
 | `--adaptation-source` | none | RoboDojo: a finished session whose agent continues here; see [section 5](#5-adaptation) |
 | `--adaptation-context` | `compact` | Adaptation: the conversation carried from the source |
+| `--skill-library`, `--library-sequence`, `--library-step` | none | Set only by `scripts/run_skill_library_sequence.py`; see [A growing controller library](#a-growing-controller-library). Leave them out for single-task research |
 | `--episode-reviews` | `off` | BEHAVIOR: `on` or `detailed` ground-truth reviews of each exploration episode; see [BEHAVIOR backend](BEHAVIOR_BACKEND.md#episode-reviews-exploration-only) |
 | `--recording-gib` | 10 | Size limit of a robot program's output folder and of a submitted bundle (recorded episode data is not capped) |
 
@@ -328,6 +329,69 @@ runtime/envs/robodojo/bin/python scripts/configure_auto_research.py --task stack
 `--formal-only` evaluates an imported agent without exploring: prepare a session with
 `--agent-formal on` and `--adaptation-source`, then launch it with `--formal-only`. Live
 copies of the source's frozen agent play the held-out layouts.
+
+### A growing controller library
+
+RoboDojo controllers that earlier sessions wrote can be handed to the next session, which
+reuses or imitates them and adds its own when it is done
+([design](superpowers/specs/2026-11-25-skill-library-design.md)).
+
+There are two kinds of research session, and the dashboard labels each:
+
+| Kind | How it is made | The agent's workflow |
+| --- | --- | --- |
+| Single-task research | any session prepared without the library options | solve the task by hand first, then automate (this guide's default) |
+| Library sequence research | only `scripts/run_skill_library_sequence.py` | code first: run the nearest library controller, work out by hand only the phases it does not do, change the code |
+
+- `configure_auto_research.py` refuses `--skill-library` unless the sequence script also
+  passes `--library-sequence` and `--library-step`. To try one task alone, run single-task
+  research without them.
+- Every task in a sequence is a new session: a new agent home and conversation. The
+  previous task's conversation, `memory/` and notes are not carried; only the library is.
+  A rerun of the sequence never resumes a session, and a library session cannot be an
+  adaptation.
+- A sequence starts from the four seed entries below.
+
+- `skill_library_seed/robodojo/` is the seed: four controllers that Claude Opus wrote in the
+  RAX authors' sessions (make_kong, plug_in_charger, pour_by_language, swap_blocks), unchanged,
+  each with a card (`SKILL.md`) and its `TASK.md`.
+- `python -m services.skill_library init DIR` creates a library from the seed as a git
+  repository. `make-kong` needs `robodojo_toolkit.py`, which exists only on the server: commit
+  it into the seed there (`skill_library_seed/robodojo/skills/make-kong/code/`) before `init`,
+  or add it to an existing library with
+  `python -m services.skill_library add-file DIR make-kong <path>/robodojo_toolkit.py`.
+  `python -m services.skill_library check DIR` lists entries whose code imports a module they
+  do not have. The sequence script's sessions get a copy at `skill-library/` in the
+  exploring agent's workspace, the `skill-library` skill and the code-first `AGENTS.md`
+  steps; each records its sequence, step and library commit in `<session>/skill-library.json`.
+- `python -m services.skill_library publish <session> DIR` adds a finished session's code to
+  the library: the submitted bundle (code mode) or the frozen `code/<project>/` (live copies),
+  its card (the agent's `code/<project>/SKILL.md`, or one listing the code), its `TASK.md`
+  and demonstration, and the formal score. `--min-success 0.3` publishes only scores at or
+  above that share.
+
+`scripts/run_skill_library_sequence.py` runs tasks in order, publishing after each formal
+batch, so each task starts from what the earlier ones added:
+
+```bash
+runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \
+    --library runtime/skill-library/deepseek-a \
+    --add-file make-kong=<path>/robodojo_toolkit.py \
+    --tasks pour_liquid_into_cup,press_by_number,swap_T,pour_balls_into_vase,insert_tubes,insert_key \
+    --configure-args "--sim-gpu 0 --agent-cli claude --agent-provider custom --formal-episodes 10" \
+    --launch-args "--claude-base-url http://127.0.0.1:8000 --claude-key-file <key file> --claude-model <model>"
+```
+
+- Each finished task appends a row to `<library>-runs.jsonl` (session, library commit before
+  and after, formal score, published entry). A rerun skips finished tasks; the sequence stops
+  at a session that wrote no `formal.json`.
+- `--runner deepseek --runner-args "..."` runs each session through
+  `scripts/run_deepseek_experiment.py` instead (local vLLM endpoint files, DSH).
+- `--no-library --records FILE` runs the same tasks without a library, for comparison.
+- `--add-file SLUG=PATH` (repeatable) copies a file into an entry before the first task and
+  commits it once; the script warns before the first task about entries that still lack a
+  module their code imports.
+- `--dry-run` prints the plan.
 
 ## 6. Parallel exploration and subagents
 

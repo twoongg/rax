@@ -22,6 +22,8 @@ COMMON_OMISSIONS = (
     SkillRule('multi-agent-exploration', lambda s: not s.contract.subagent_cap),
     # Visual demonstrations are optional context; without them the skill has nothing to read.
     SkillRule('in-context-action-learning', lambda s: not s.demonstrations),
+    # The library skill reads skill-library/, which only an exploring agent's workspace holds.
+    SkillRule('skill-library', lambda s: not s.skill_library or 'formal-episode' in s.options),
 )
 # Collection references an agent formal copy has no use for.
 FORMAL_REMOVED = ('experience-memory/references/format.md', 'robot-interface/references/pose-records.md')

@@ -14,6 +14,12 @@ reachable only through MCP.
 
 ## Start from your successful exploration
 
+{% if skill_library %}
+With the controller library, your project already holds the copied entry's code. Change
+one phase at a time, as AGENTS.md step 2 says, and test each change in the current
+exploration scene with the ordinary Python example below.
+
+{% endif %}
 Read the saved successful strategy and decisive frames in `memory/`. Create a
 project under `code/<project>/` and turn one useful maneuver into a
 Python function that receives `ctx` and explicit inputs. Test it in the current
