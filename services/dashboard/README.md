@@ -44,6 +44,11 @@ running; otherwise it is review-only, so resume it from the terminal.
   - **Resume:** relaunches a stopped, exited, failed or crashed session in its own
     conversation, headless;
   - **Stop:** signals the session's launcher, as `scripts/stop_auto_research_agent.sh`.
+- **Controller library:** only for sessions prepared with `--skill-library`. It shows every
+  entry the library holds now, oldest first: the seed, then one per finished task, with its
+  task, formal score, when it was added and where it came from. Each row is marked as given
+  to this session at start, added by this session, or added later. The note names the
+  library commit the session got and the current one.
 - **Live cameras:** the latest saved camera frames of the running episode. The dashboard
   reads saved files and never calls the robot.
 - **Trajectory videos:** every simulator episode (exploration, rehearsal, formal and

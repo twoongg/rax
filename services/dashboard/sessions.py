@@ -358,6 +358,32 @@ class ResearchSessions:
                 result['pending'] = True  # Recorded when the session launches.
         return result
 
+    @staticmethod
+    def skill_library(directory, config):
+        """A --skill-library session's controller library: the entries the agent was given (the
+        session's skill-library.json) and every entry the library holds now, oldest first, so a
+        task sequence shows what has piled up. None for sessions without a library."""
+        path = config.get('skill_library')
+        if not path:
+            return None
+        from services import skill_library as library_files
+        given = read_json(directory/library_files.PROVENANCE)
+        library = Path(path)
+        available = (library/'INDEX.md').is_file()
+        given_slugs = set(given.get('entries') or [])
+        mine = f'session {directory.name}'
+        entries = []
+        for entry in library_files.entries(library) if available else []:
+            fields = entry['fields']
+            source = fields.get('source', '')
+            entries.append({'slug': entry['slug'], 'task': fields.get('task'), 'formal': fields.get('formal'),
+                            'added': fields.get('added'), 'source': source,
+                            'given': entry['slug'] in given_slugs,
+                            'from_this_session': source == mine or source.startswith(mine+' ')})
+        return {'path': path, 'available': available, 'given_commit': given.get('commit'),
+                'given_count': len(given_slugs) if given else None,
+                'head': library_files.head(library) if available else None, 'entries': entries}
+
     def detail(self, run_id, *, history=False):
         directory = self.directory(run_id, history=history)
         summary = self.summary(directory)
@@ -380,6 +406,7 @@ class ResearchSessions:
                 from services.native_cli_usage import UsageReader
                 usage = UsageReader().read(directory/(name+'-home'))
         return {**summary, 'command': self.command(directory),
+                'skill_library': self.skill_library(directory, read_json(directory/'operator-input.json')),
                 'live_observation': self.live_observation(directory),
                 'configuration': read_json(directory/'operator-input.json'), 'usage': usage,
                 'subagents': read_json(directory/'subagents.json') or None,

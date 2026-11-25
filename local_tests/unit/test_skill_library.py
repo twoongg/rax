@@ -254,3 +254,35 @@ def test_the_comparison_run_records_scores_without_a_library(tmp_path):
     rows = runner.sequence(['a'], library=None, records=tmp_path/'runs.jsonl', prepare=prepare,
                            launch=lambda root: 0, publish=False, log=lambda *a: None)
     assert rows[0]['status'] == 'evaluated' and rows[0]['formal'] == '2/4' and 'publish' not in rows[0]
+
+
+def test_the_dashboard_shows_what_a_library_session_was_given_and_what_piled_up(tmp_path):
+    from services.dashboard.sessions import ResearchSessions
+    library = tmp_path/'library'
+    commit = lib.init(library)
+    dashboard = ResearchSessions(tmp_path/'project', lambda: ['make_kong'])
+    ident = '20261125T120000Z_0123456789'
+    root = make_session(dashboard.root/ident, formal=(2, 5))
+    config = json.loads((root/'operator-input.json').read_text())
+    (root/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a',
+                                                        'skill_library': str(library)}))
+    (root/lib.PROVENANCE).write_text(json.dumps({'library': str(library), 'commit': commit,
+                                                 'entries': [e['slug'] for e in lib.entries(library)]}))
+    lib.publish(root, library, now=100)
+    lib.publish(make_session(tmp_path/'later', task='swap_t', formal=(1, 5)), library, now=200)
+    view = dashboard.detail(ident)['skill_library']
+    assert view['available'] and view['given_commit'] == commit and view['given_count'] == 4
+    assert view['head'] == lib.head(library) != commit
+    assert [(e['slug'], e['given'], e['from_this_session'], e['formal']) for e in view['entries']] == [
+        ('make-kong', True, False, 'not published'), ('plug-in-charger', True, False, 'not published'),
+        ('pour-by-language', True, False, 'not published'), ('swap-blocks', True, False, 'not published'),
+        ('pour-liquid-into-cup', False, True, '2/5'), ('swap-t', False, False, '1/5')]
+    # A session without a library has no library view; an unreadable library says so.
+    other = make_session(dashboard.root/'20261125T120001Z_0123456789')
+    config = json.loads((other/'operator-input.json').read_text())
+    (other/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a'}))
+    assert dashboard.detail(other.name)['skill_library'] is None
+    (other/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a',
+                                                         'skill_library': str(tmp_path/'gone')}))
+    gone = dashboard.detail(other.name)['skill_library']
+    assert gone['available'] is False and gone['entries'] == [] and gone['given_count'] is None
