@@ -340,7 +340,10 @@ reuses or imitates them and adds its own when it is done
   RAX authors' sessions (make_kong, plug_in_charger, pour_by_language, swap_blocks), unchanged,
   each with a card (`SKILL.md`) and its `TASK.md`.
 - `python -m services.skill_library init DIR` creates a library from the seed as a git
-  repository. `--skill-library DIR` (prepare) copies it into the exploring agent's workspace
+  repository. `make-kong` needs `robodojo_toolkit.py`, which exists only on the server: add it
+  with `python -m services.skill_library add-file DIR make-kong <path>/robodojo_toolkit.py`.
+  `python -m services.skill_library check DIR` lists entries whose code imports a module they
+  do not have. `--skill-library DIR` (prepare) copies it into the exploring agent's workspace
   as `skill-library/` and installs the `skill-library` skill and numbered `AGENTS.md` steps;
   the session records the library commit it got in `<session>/skill-library.json`.
 - `python -m services.skill_library publish <session> DIR` adds a finished session's code to
@@ -355,6 +358,7 @@ batch, so each task starts from what the earlier ones added:
 ```bash
 runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \
     --library runtime/skill-library/deepseek-a \
+    --add-file make-kong=<path>/robodojo_toolkit.py \
     --tasks pour_liquid_into_cup,press_by_number,swap_t,pour_balls_into_vase,insert_tubes,insert_key \
     --configure-args "--sim-gpu 0 --agent-cli claude --agent-provider custom --formal-episodes 10" \
     --launch-args "--claude-base-url http://127.0.0.1:8000 --claude-key-file <key file> --claude-model <model>"
@@ -366,6 +370,9 @@ runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \
 - `--runner deepseek --runner-args "..."` runs each session through
   `scripts/run_deepseek_experiment.py` instead (local vLLM endpoint files, DSH).
 - `--no-library --records FILE` runs the same tasks without a library, for comparison.
+- `--add-file SLUG=PATH` (repeatable) copies a file into an entry before the first task and
+  commits it once; the script warns before the first task about entries that still lack a
+  module their code imports.
 - `--dry-run` prints the plan.
 
 ## 6. Parallel exploration and subagents

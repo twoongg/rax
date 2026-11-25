@@ -286,3 +286,25 @@ def test_the_dashboard_shows_what_a_library_session_was_given_and_what_piled_up(
                                                          'skill_library': str(tmp_path/'gone')}))
     gone = dashboard.detail(other.name)['skill_library']
     assert gone['available'] is False and gone['entries'] == [] and gone['given_count'] is None
+
+
+def test_a_server_only_module_is_flagged_until_added_to_its_entry(tmp_path):
+    library = tmp_path/'library'
+    seeded = lib.init(library)
+    assert lib.missing_modules(library) == {'make-kong': ['robodojo_toolkit']}
+    assert 'add-file' in lib.missing_report(library)[0]
+    toolkit = tmp_path/'server'/'robodojo_toolkit.py'
+    toolkit.parent.mkdir()
+    toolkit.write_text('import numpy\n\n\ndef parse_reply(reply):\n    return {}, {}\n')
+    added = lib.add_files(library, 'make-kong', [toolkit])
+    assert added != seeded and (library/'skills/make-kong/code/robodojo_toolkit.py').read_text() == toolkit.read_text()
+    assert lib.missing_modules(library) == {} and lib.missing_report(library) == []
+    assert lib.add_files(library, 'make-kong', [toolkit]) == added  # The same file again: no new commit.
+    with pytest.raises(ValueError, match='no entry'):
+        lib.add_files(library, 'no-such-entry', [toolkit])
+    # The sequence script takes the same as --add-file SLUG=PATH.
+    sys.path.insert(0, str(PROJECT/'scripts'))
+    import run_skill_library_sequence as runner
+    assert runner.add_files(library, [f'make-kong={toolkit}']) == added
+    with pytest.raises(ValueError, match='SLUG=PATH'):
+        runner.add_files(library, [str(toolkit)])

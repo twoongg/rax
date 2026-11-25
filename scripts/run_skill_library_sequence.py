@@ -13,7 +13,9 @@ grown library. Design: docs/superpowers/specs/2026-11-25-skill-library-design.md
         --launch-args "--claude-base-url http://127.0.0.1:8000 --claude-key-file <key file> --claude-model <model>"
 
 The library is created from the seed (skill_library_seed/robodojo) on first use, as a git
-repository. Each finished task appends a row to --records (default <library>-runs.jsonl); a
+repository. --add-file SLUG=PATH copies a file that exists only on the server into an entry's
+code/ (make-kong needs robodojo_toolkit.py: --add-file make-kong=<path>/robodojo_toolkit.py);
+before the first task the script warns about entries whose code imports a module they lack. Each finished task appends a row to --records (default <library>-runs.jsonl); a
 rerun skips tasks already recorded as finished, so a stopped sequence resumes where it was.
 --no-library runs the same tasks without a library, for comparison (needs --records).
 """
@@ -95,6 +97,17 @@ def sequence(tasks, *, library, records, prepare, launch, publish=True, min_succ
     return rows
 
 
+def add_files(library, specs):
+    """Apply --add-file SLUG=PATH values; returns the library commit."""
+    revision = skill_library.head(library)
+    for spec in specs:
+        slug, sep, path = spec.partition('=')
+        if not sep or not slug or not path:
+            raise ValueError(f'--add-file needs SLUG=PATH, got {spec!r}')
+        revision = skill_library.add_files(library, slug, [Path(path).expanduser()])
+    return revision
+
+
 def configure_runner(args):
     """Prepare with configure_auto_research.py and run the launcher headless."""
     python = sys.executable
@@ -150,6 +163,9 @@ def main(argv=None):
     parser.add_argument('--tasks', required=True, help='Comma-separated tasks, in order')
     parser.add_argument('--records', type=Path, help='JSONL of finished tasks (default <library>-runs.jsonl)')
     parser.add_argument('--no-library', action='store_true', help='Run without a library (the comparison)')
+    parser.add_argument('--add-file', action='append', default=[], metavar='SLUG=PATH',
+                        help="Copy a file into a library entry's code/ before the first task, e.g. "
+                             'make-kong=<path>/robodojo_toolkit.py (repeatable; committed once)')
     parser.add_argument('--min-success', type=float,
                         help='Publish only sessions whose formal share is at least this (default: always publish)')
     parser.add_argument('--runner', choices=('configure', 'deepseek'), default='configure')
@@ -171,12 +187,16 @@ def main(argv=None):
     done = finished_tasks(read_records(args.records))
     print(json.dumps({'tasks': tasks, 'already_finished': sorted(done & set(tasks)),
                       'library': str(args.library) if not args.no_library else None,
+                      'add_files': args.add_file,
                       'records': str(args.records), 'runner': args.runner, 'min_success': args.min_success},
                      indent=2), flush=True)
     if args.dry_run:
         return
     if not args.no_library:
-        print('library commit', skill_library.init(args.library, args.seed), flush=True)
+        skill_library.init(args.library, args.seed)
+        print('library commit', add_files(args.library, args.add_file), flush=True)
+        for line in skill_library.missing_report(args.library):
+            print('warning:', line, flush=True)
     prepare, launch = (deepseek_runner if args.runner == 'deepseek' else configure_runner)(args)
     rows = sequence(tasks, library=None if args.no_library else args.library, records=args.records,
                     prepare=prepare, launch=launch, publish=not args.no_library, min_success=args.min_success)

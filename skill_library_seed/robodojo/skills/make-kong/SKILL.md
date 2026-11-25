@@ -18,9 +18,14 @@ object upright, waiting for something else in the scene to change, or precise pl
 fixed spot. Also for camera geometry without depth: pixel rays, projection and multi-view
 triangulation (`triangulation.py`). The task text is in [TASK.md](TASK.md).
 
-**It does not run as published.** `controller.py` imports `robodojo_toolkit`, an in-process
-planner and IK library from the authors' setup that was not published. Use it as a reference
-and replace the calls:
+**It needs `robodojo_toolkit.py`.** `controller.py` imports `robodojo_toolkit`, a planner and
+IK module from the authors' setup that was not published. A replacement was written later,
+and make_kong runs with it. Look in this entry's `code/`:
+
+- **`code/robodojo_toolkit.py` is there:** copy it with the rest of `code/`; the controller
+  runs as it is.
+- **It is not there:** the controller stops at the import. Use the entry as a reference and
+  replace the calls:
 
 | Call in controller.py | What it did | Use instead |
 |---|---|---|
@@ -56,9 +61,9 @@ Entry: `code/controller.py`, `main(ctx)`. Modules: `scene.py` (fixed scene facts
 |---|---|---|---|
 | `transform`, `intrinsics`, `camera_pose`, `pixel_ray`, `ray_plane`, `project`, `triangulate` | triangulation.py | Pinhole models of cam_high and both wrist cameras (wrist pose from the reply's link6 pose); pixel -> ray, ray -> plane point, point -> pixel, least-squares point from 2+ views | General, NumPy only; works without depth |
 | `qmul`, `qaxis`, `qrot` | controller.py | Quaternion product, axis-angle, rotate a vector | General |
-| `Bot.run_joint`, `arm_rows`, `run_parallel`, `hold`, `gripper` | controller.py | Joint-row execution with gripper columns forced to the commanded opening; move both arms at once | General; needs the tk replacements above |
-| `Bot.plan`, `plan_rows`, `plan_joint_goal` | controller.py | Planned moves with fallback targets | Pattern; replace the planner |
-| `Bot.ee_line`, `ee_path` | controller.py | Straight Cartesian lines / pose lists for one arm | Pattern; replace `tk.ee_rows` |
+| `Bot.run_joint`, `arm_rows`, `run_parallel`, `hold`, `gripper` | controller.py | Joint-row execution with gripper columns forced to the commanded opening; move both arms at once | General; needs `robodojo_toolkit.py` or the replacements above |
+| `Bot.plan`, `plan_rows`, `plan_joint_goal` | controller.py | Planned moves with fallback targets | Pattern; uses `robodojo_toolkit.py`'s planner |
+| `Bot.ee_line`, `ee_path` | controller.py | Straight Cartesian lines / pose lists for one arm | Pattern; uses `robodojo_toolkit.ee_rows` |
 | `densify` | controller.py | Insert rows so no joint jumps more than a limit per row | General |
 | `handover` | controller.py | Two-arm hand-over sequence | General pattern |
 | `rotate_and_place` | controller.py | Rotate a held object about the fingertip, then place upright | General pattern |

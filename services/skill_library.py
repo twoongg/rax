@@ -16,10 +16,12 @@ repository; each publish is a commit. Design: docs/superpowers/specs/2026-11-25-
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -35,6 +37,9 @@ IGNORE = shutil.ignore_patterns('.git', '__pycache__', '*.pyc')
 GIT = ('git', '-c', 'user.name=skill-library', '-c', 'user.email=skill-library@localhost',
        '-c', 'commit.gpgsign=false')
 FRONTMATTER = re.compile(r'\A---\n(.*?)\n---\n', re.S)
+# Modules a controller may import without carrying them: the workspace's own API and the
+# robot Python's packages, also when this machine lacks one (missing_modules).
+PROVIDED = frozenset({'api', 'numpy', 'scipy', 'cv2', 'PIL', 'torch', 'yaml', 'trimesh', 'imageio', 'matplotlib'})
 FIELDS = ('name', 'description', 'status', 'robot', 'entry', 'task', 'source', 'formal', 'added')
 
 INDEX_HEADER = """# Library index
@@ -146,6 +151,60 @@ def init(library, seed=SEED):
     write_index(library)
     _git(library, 'init', '-q')
     return commit(library, f'Seed the library from {Path(seed).name}')
+
+
+def add_files(library, slug, paths):
+    """Copy files into an entry's code/ and commit: modules an entry needs that live only where
+    the library runs (make-kong's robodojo_toolkit.py). The same bytes again change nothing."""
+    library, entry = Path(library), Path(library)/'skills'/slug
+    if not (entry/CARD).is_file():
+        raise ValueError(f'{library} has no entry {slug!r}')
+    paths = [Path(p) for p in paths]
+    for path in paths:
+        if not path.is_file():
+            raise ValueError(f'{path} is not a file')
+        (entry/'code').mkdir(exist_ok=True)
+        shutil.copyfile(path, entry/'code'/path.name)
+    return commit(library, f'Add {", ".join(p.name for p in paths)} to {slug}')
+
+
+def missing_modules(library):
+    """{slug: [module, ...]}: top-level modules an entry's code imports that are neither in its
+    code/, nor the standard library, nor provided (PROVIDED, or importable here)."""
+    found = {}
+    for entry in sorted((Path(library)/'skills').glob('*/code')):
+        local = {p.stem for p in entry.rglob('*.py')} | {p.name for p in entry.iterdir() if p.is_dir()}
+        names = set()
+        for path in entry.rglob('*.py'):
+            try:
+                tree = ast.parse(path.read_text())
+            except (SyntaxError, UnicodeDecodeError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names |= {alias.name.split('.')[0] for alias in node.names}
+                elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                    names.add(node.module.split('.')[0])
+        missing = sorted(name for name in names - local - PROVIDED
+                         if name not in sys.stdlib_module_names and not _importable(name))
+        if missing:
+            found[entry.parent.name] = missing
+    return found
+
+
+def _importable(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def missing_report(library):
+    """Warning lines for entries whose code cannot run as it stands (empty when all can)."""
+    return [f'{slug}: code imports {", ".join(names)}, which the entry does not have'
+            + (' (add the server copy: python -m services.skill_library add-file '
+               f'{library} {slug} <path>/robodojo_toolkit.py)' if names == ['robodojo_toolkit'] else '')
+            for slug, names in missing_modules(library).items()]
 
 
 # --------------------------------------------------------------------------- workspace
@@ -351,11 +410,25 @@ def main(argv=None):
     add.add_argument('session', type=Path)
     add.add_argument('library', type=Path)
     add.add_argument('--min-success', type=float)
+    files = commands.add_parser('add-file', help="copy files into an entry's code/ and commit")
+    files.add_argument('library', type=Path)
+    files.add_argument('slug')
+    files.add_argument('files', type=Path, nargs='+')
+    check = commands.add_parser('check', help='list entries whose code imports a module they do not have')
+    check.add_argument('library', type=Path)
     args = parser.parse_args(argv)
     if args.command == 'init':
         print(init(args.library, args.seed))
+        for line in missing_report(args.library):
+            print('warning:', line, file=sys.stderr)
     elif args.command == 'index':
         write_index(args.library)
+    elif args.command == 'add-file':
+        print(add_files(args.library, args.slug, args.files))
+    elif args.command == 'check':
+        lines = missing_report(args.library)
+        print('\n'.join(lines) if lines else 'every entry has the modules its code imports')
+        raise SystemExit(1 if lines else 0)
     else:
         print(json.dumps(publish(args.session, args.library, min_success=args.min_success), indent=2))
 
