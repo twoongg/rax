@@ -78,7 +78,7 @@ names the reason, for example `--task-rules does not apply to BEHAVIOR sessions:
 | `--write-handoff` | `off` | RoboDojo: install the `transfer-handoff` skill, so this session can be an adaptation source |
 | `--adaptation-source` | none | RoboDojo: a finished session whose agent continues here; see [section 5](#5-adaptation) |
 | `--adaptation-context` | `compact` | Adaptation: the conversation carried from the source |
-| `--skill-library` | none | A controller library copied into the agent's workspace; see [A growing controller library](#a-growing-controller-library) |
+| `--skill-library`, `--library-sequence`, `--library-step` | none | Set only by `scripts/run_skill_library_sequence.py`; see [A growing controller library](#a-growing-controller-library). Leave them out for single-task research |
 | `--episode-reviews` | `off` | BEHAVIOR: `on` or `detailed` ground-truth reviews of each exploration episode; see [BEHAVIOR backend](BEHAVIOR_BACKEND.md#episode-reviews-exploration-only) |
 | `--recording-gib` | 10 | Size limit of a robot program's output folder and of a submitted bundle (recorded episode data is not capped) |
 
@@ -336,6 +336,22 @@ RoboDojo controllers that earlier sessions wrote can be handed to the next sessi
 reuses or imitates them and adds its own when it is done
 ([design](superpowers/specs/2026-11-25-skill-library-design.md)).
 
+There are two kinds of research session, and the dashboard labels each:
+
+| Kind | How it is made | The agent's workflow |
+| --- | --- | --- |
+| Single-task research | any session prepared without the library options | solve the task by hand first, then automate (this guide's default) |
+| Library sequence research | only `scripts/run_skill_library_sequence.py` | code first: run the nearest library controller, work out by hand only the phases it does not do, change the code |
+
+- `configure_auto_research.py` refuses `--skill-library` unless the sequence script also
+  passes `--library-sequence` and `--library-step`. To try one task alone, run single-task
+  research without them.
+- Every task in a sequence is a new session: a new agent home and conversation. The
+  previous task's conversation, `memory/` and notes are not carried; only the library is.
+  A rerun of the sequence never resumes a session, and a library session cannot be an
+  adaptation.
+- A sequence starts from the four seed entries below.
+
 - `skill_library_seed/robodojo/` is the seed: four controllers that Claude Opus wrote in the
   RAX authors' sessions (make_kong, plug_in_charger, pour_by_language, swap_blocks), unchanged,
   each with a card (`SKILL.md`) and its `TASK.md`.
@@ -345,9 +361,9 @@ reuses or imitates them and adds its own when it is done
   or add it to an existing library with
   `python -m services.skill_library add-file DIR make-kong <path>/robodojo_toolkit.py`.
   `python -m services.skill_library check DIR` lists entries whose code imports a module they
-  do not have. `--skill-library DIR` (prepare) copies it into the exploring agent's workspace
-  as `skill-library/` and installs the `skill-library` skill and numbered `AGENTS.md` steps;
-  the session records the library commit it got in `<session>/skill-library.json`.
+  do not have. The sequence script's sessions get a copy at `skill-library/` in the
+  exploring agent's workspace, the `skill-library` skill and the code-first `AGENTS.md`
+  steps; each records its sequence, step and library commit in `<session>/skill-library.json`.
 - `python -m services.skill_library publish <session> DIR` adds a finished session's code to
   the library: the submitted bundle (code mode) or the frozen `code/<project>/` (live copies),
   its card (the agent's `code/<project>/SKILL.md`, or one listing the code), its `TASK.md`

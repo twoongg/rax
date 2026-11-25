@@ -329,7 +329,10 @@ class ResearchSessions:
         spend = state.get('gemini_spend', {})
         reported, reserved = spend.get('reported', 0)/NANODOLLARS, spend.get('reserved', 0)/NANODOLLARS
         limit = None if SESSION_LIMIT is None else SESSION_LIMIT/NANODOLLARS
-        return dict(run_id=directory.name, task=config.get('task'), status=status, alive=alive, stage=stage,
+        # Library sequence research (scripts/run_skill_library_sequence.py) or single-task research.
+        research = ({'mode': 'library sequence', 'sequence': config.get('library_sequence'),
+                     'step': config.get('library_step')} if config.get('skill_library') else {'mode': 'single task'})
+        return dict(run_id=directory.name, task=config.get('task'), research=research, status=status, alive=alive, stage=stage,
             demonstration_context=config.get('demonstration_context', 'none'),
             sim_gpu=config.get('sim_gpu'),
             exploration_used=state.get('exploration_started', 0), exploration_limit=len(config.get('exploration_seeds', [])),

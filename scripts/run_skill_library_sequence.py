@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Run tasks one after another, growing a controller library between them.
 
-For each task: prepare a session with the library (--skill-library), run it headless to the
-end of its formal batch, then add the code it was evaluated with to the library
-(services/skill_library.py publish), whatever its score. The next task starts from the
-grown library. Design: docs/superpowers/specs/2026-11-25-skill-library-design.md.
+Library sequence research: for each task, prepare a fresh session with the library
+(--skill-library, --library-sequence, --library-step; only this script sets them), run it
+headless to the end of its formal batch, then add the code it was evaluated with to the
+library (services/skill_library.py publish), whatever its score. Every task gets a new
+session and a new agent conversation; only the library carries over, and a rerun never
+resumes a session. Single-task research is an ordinary session without these options.
+Design: docs/superpowers/specs/2026-11-25-skill-library-design.md.
 
     runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \\
         --library runtime/skill-library/deepseek-a \\
@@ -51,11 +54,11 @@ def finished_tasks(records):
     return {row['task'] for row in records if row.get('status') in FINISHED}
 
 
-def run_one(task, *, library, prepare, launch, publish=True, min_success=None, log=print):
+def run_one(task, *, step='1/1', library, prepare, launch, publish=True, min_success=None, log=print):
     """One task: prepare -> launch (exploration and formal batch) -> publish. Returns its record row."""
-    row = {'task': task, 'started': time.time(), 'library': str(library) if library else None,
+    row = {'task': task, 'step': step, 'started': time.time(), 'library': str(library) if library else None,
            'library_before': skill_library.head(library) if library else None}
-    root = Path(prepare(task))
+    root = Path(prepare(task, step))
     row['session'] = str(root)
     log(f'[{task}] session {root}')
     row['returncode'] = launch(root)
@@ -83,12 +86,12 @@ def sequence(tasks, *, library, records, prepare, launch, publish=True, min_succ
     """Run the tasks in order; stop at a session that wrote no formal.json (fix it and rerun)."""
     done = finished_tasks(read_records(records))
     rows = []
-    for task in tasks:
+    for number, task in enumerate(tasks, 1):
         if task in done:
             log(f'[{task}] already finished in {records}; skipped')
             continue
-        row = run_one(task, library=library, prepare=prepare, launch=launch, publish=publish,
-                      min_success=min_success, log=log)
+        row = run_one(task, step=f'{number}/{len(tasks)}', library=library, prepare=prepare, launch=launch,
+                      publish=publish, min_success=min_success, log=log)
         append_record(records, row)
         rows.append(row)
         if row['status'] == 'failed':
@@ -108,14 +111,20 @@ def add_files(library, specs):
     return revision
 
 
+def library_flags(args, step):
+    """The options that make a session one step of this library sequence (none without a library)."""
+    if args.no_library:
+        return []
+    return ['--skill-library', str(args.library), '--library-sequence', args.sequence_name, '--library-step', step]
+
+
 def configure_runner(args):
     """Prepare with configure_auto_research.py and run the launcher headless."""
     python = sys.executable
 
-    def prepare(task):
+    def prepare(task, step):
         command = [python, str(PROJECT/'scripts/configure_auto_research.py'), '--task', task,
-                   *(['--skill-library', str(args.library)] if not args.no_library else []),
-                   *shlex.split(args.configure_args)]
+                   *library_flags(args, step), *shlex.split(args.configure_args)]
         output = subprocess.run(command, cwd=PROJECT, check=True, capture_output=True, text=True).stdout
         config = Path(output.strip().splitlines()[-1])
         if not config.is_file():
@@ -135,12 +144,10 @@ def deepseek_runner(args):
     """Prepare and run each session with run_deepseek_experiment.py (local vLLM endpoints, DSH)."""
     sessions = {}
 
-    def prepare(task):
+    def prepare(task, step):
         record = Path(args.records).with_suffix('')/f'{task}-{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())}.json'
         command = [sys.executable, str(PROJECT/'scripts/run_deepseek_experiment.py'), '--task', task,
-                   '--record', str(record),
-                   *(['--skill-library', str(args.library)] if not args.no_library else []),
-                   *shlex.split(args.runner_args)]
+                   '--record', str(record), *library_flags(args, step), *shlex.split(args.runner_args)]
         child = subprocess.Popen(command, cwd=PROJECT, stdout=subprocess.PIPE, text=True)
         first = child.stdout.readline()  # The runner prints its record (with the session) before launching.
         root = Path(json.loads(first)['session'])
@@ -162,6 +169,7 @@ def main(argv=None):
     parser.add_argument('--seed', type=Path, default=skill_library.SEED)
     parser.add_argument('--tasks', required=True, help='Comma-separated tasks, in order')
     parser.add_argument('--records', type=Path, help='JSONL of finished tasks (default <library>-runs.jsonl)')
+    parser.add_argument('--sequence-name', help='Name shown for these sessions (default: the library folder name)')
     parser.add_argument('--no-library', action='store_true', help='Run without a library (the comparison)')
     parser.add_argument('--add-file', action='append', default=[], metavar='SLUG=PATH',
                         help="Copy a file into a library entry's code/ before the first task, e.g. "
@@ -183,11 +191,12 @@ def main(argv=None):
     if args.min_success is not None and not 0 <= args.min_success <= 1:
         parser.error('--min-success must be between 0 and 1')
     args.library = args.library.resolve() if args.library else None
+    args.sequence_name = args.sequence_name or (args.library.name if args.library else args.records.stem)
     args.records = (args.records or Path(f'{args.library}-runs.jsonl')).resolve()
     done = finished_tasks(read_records(args.records))
     print(json.dumps({'tasks': tasks, 'already_finished': sorted(done & set(tasks)),
                       'library': str(args.library) if not args.no_library else None,
-                      'add_files': args.add_file,
+                      'sequence_name': args.sequence_name, 'add_files': args.add_file,
                       'records': str(args.records), 'runner': args.runner, 'min_success': args.min_success},
                      indent=2), flush=True)
     if args.dry_run:

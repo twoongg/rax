@@ -180,7 +180,8 @@ def populate(tmp_path, library, *, formal_episode=False):
     from harness.codex_cli.auto_research import populate_workspace
     from services.mcp_contract import Contract
     config = render_workspaces.configuration(tmp_path/'root', skill_library=str(library) if library else None,
-                                             agent_formal=formal_episode)
+                                             library_sequence='seq' if library else None,
+                                             library_step='1/2' if library else None, agent_formal=formal_episode)
     workspace = tmp_path/'ws'
     workspace.mkdir()
     contract = Contract.from_config(config, isolated=True) if formal_episode else None
@@ -196,8 +197,13 @@ def test_the_exploring_agent_gets_a_copy_of_the_library(tmp_path):
     assert (workspace/'.agents/skills/skill-library/SKILL.md').is_file()
     agents = (workspace/'AGENTS.md').read_text()
     assert '0. **Start from the controller library.**' in agents and 'skill-library/INDEX.md' in agents
+    # Code first, in a fresh session: no whole-task manual solve before automating.
+    words = ' '.join(agents.split())
+    assert 'This session started fresh for this task' in words and 'Solve the task by hand first' not in words
+    assert 'If manual success is not yet' not in words and 'Work out by hand what the copied code does not do' in words
     provenance = json.loads((config.root/lib.PROVENANCE).read_text())
     assert provenance['commit'] == commit and 'swap-blocks' in provenance['entries']
+    assert (provenance['sequence'], provenance['step']) == ('seq', '1/2')
 
 
 @pytest.mark.parametrize('case', ['no library', 'formal copy'])
@@ -209,6 +215,7 @@ def test_no_library_without_the_option_or_in_a_formal_copy(tmp_path, case):
     assert not (workspace/'skill-library').exists()
     assert not (workspace/'.agents/skills/skill-library').exists()
     assert 'skill-library' not in (workspace/'AGENTS.md').read_text()
+    assert 'started fresh' not in (workspace/'AGENTS.md').read_text()
 
 
 def test_the_sequence_publishes_in_order_stops_on_a_broken_session_and_resumes(tmp_path):
@@ -219,9 +226,9 @@ def test_the_sequence_publishes_in_order_stops_on_a_broken_session_and_resumes(t
     broken = {'b'}
     seen = []
 
-    def prepare(task):
+    def prepare(task, step):
         root = tmp_path/'sessions'/f'{task}-{len(seen)}'
-        seen.append(task)
+        seen.append((task, step))
         make_session(root, task=task, formal=None)
         return root
 
@@ -239,7 +246,9 @@ def test_the_sequence_publishes_in_order_stops_on_a_broken_session_and_resumes(t
     rows = runner.sequence(['a', 'b', 'c'], library=library, records=records, prepare=prepare, launch=launch,
                            log=lambda *a: None)
     assert [(r['task'], r['status']) for r in rows] == [('b', 'published'), ('c', 'published')]
-    assert seen == ['a', 'b', 'b', 'c']
+    # Every attempt is a new session; a rerun never resumes one, and steps keep their place.
+    assert seen == [('a', '1/3'), ('b', '2/3'), ('b', '2/3'), ('c', '3/3')]
+    assert len({r['session'] for r in runner.read_records(records)}) == 4
     assert [e['slug'] for e in lib.entries(library)][-3:] == ['a', 'b', 'c']
     assert len(runner.read_records(records)) == 4
 
@@ -248,7 +257,7 @@ def test_the_comparison_run_records_scores_without_a_library(tmp_path):
     sys.path.insert(0, str(PROJECT/'scripts'))
     import run_skill_library_sequence as runner
 
-    def prepare(task):
+    def prepare(task, step):
         return make_session(tmp_path/task, task=task, formal=(2, 4))
 
     rows = runner.sequence(['a'], library=None, records=tmp_path/'runs.jsonl', prepare=prepare,
@@ -265,12 +274,15 @@ def test_the_dashboard_shows_what_a_library_session_was_given_and_what_piled_up(
     root = make_session(dashboard.root/ident, formal=(2, 5))
     config = json.loads((root/'operator-input.json').read_text())
     (root/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a',
-                                                        'skill_library': str(library)}))
+                                                        'skill_library': str(library), 'library_sequence': 'seq',
+                                                        'library_step': '2/6'}))
     (root/lib.PROVENANCE).write_text(json.dumps({'library': str(library), 'commit': commit,
                                                  'entries': [e['slug'] for e in lib.entries(library)]}))
     lib.publish(root, library, now=100)
     lib.publish(make_session(tmp_path/'later', task='swap_t', formal=(1, 5)), library, now=200)
-    view = dashboard.detail(ident)['skill_library']
+    detail = dashboard.detail(ident)
+    assert detail['research'] == {'mode': 'library sequence', 'sequence': 'seq', 'step': '2/6'}
+    view = detail['skill_library']
     assert view['available'] and view['given_commit'] == commit and view['given_count'] == 4
     assert view['head'] == lib.head(library) != commit
     assert [(e['slug'], e['given'], e['from_this_session'], e['formal']) for e in view['entries']] == [
@@ -282,6 +294,7 @@ def test_the_dashboard_shows_what_a_library_session_was_given_and_what_piled_up(
     config = json.loads((other/'operator-input.json').read_text())
     (other/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a'}))
     assert dashboard.detail(other.name)['skill_library'] is None
+    assert dashboard.detail(other.name)['research'] == {'mode': 'single task'}
     (other/'operator-input.json').write_text(json.dumps({**config, 'exploration_seeds': [1], 'sim_gpu': 'GPU-a',
                                                          'skill_library': str(tmp_path/'gone')}))
     gone = dashboard.detail(other.name)['skill_library']
@@ -312,3 +325,38 @@ def test_a_server_only_module_is_flagged_until_added_to_its_entry(tmp_path):
     assert runner.add_files(library, [f'make-kong={toolkit}']) == added
     with pytest.raises(ValueError, match='SLUG=PATH'):
         runner.add_files(library, [str(toolkit)])
+
+
+def test_only_the_sequence_script_makes_library_sessions(tmp_path, monkeypatch, capsys):
+    # The configure flag alone is refused before anything else runs.
+    sys.path.insert(0, str(PROJECT/'scripts'))
+    import configure_auto_research as configure
+    monkeypatch.setattr(sys, 'argv', ['configure_auto_research.py', '--task', 'make_kong', '--sim-gpu', '0',
+                                      '--skill-library', str(lib.SEED)])
+    with pytest.raises(SystemExit):
+        configure.main()
+    assert 'for single-task research, leave it out' in capsys.readouterr().err
+    # The configuration itself holds the three together, as K/N, and never with an adaptation source.
+    import render_workspaces
+    for changes, match in (({'skill_library': str(lib.SEED)}, 'go together'),
+                           ({'library_sequence': 'seq', 'library_step': '1/2'}, 'go together'),
+                           ({'skill_library': str(lib.SEED), 'library_sequence': 'seq', 'library_step': '3/2'}, 'K/N'),
+                           ({'skill_library': str(lib.SEED), 'library_sequence': 'seq', 'library_step': '1/2',
+                             'adaptation_source': str(tmp_path)}, 'fresh agent')):
+        with pytest.raises(ValueError, match=match):
+            render_workspaces.configuration(tmp_path/'root', **changes)
+    config = render_workspaces.configuration(tmp_path/'root', skill_library=str(lib.SEED), library_sequence='seq',
+                                             library_step='2/2')
+    assert config.library_step == '2/2'
+
+
+def test_a_library_session_saved_before_sequences_still_loads(tmp_path):
+    import dataclasses
+    sys.path.insert(0, str(PROJECT/'scripts'))
+    import render_workspaces
+    from services.controller.config import Configuration
+    saved = json.loads(json.dumps(dataclasses.asdict(render_workspaces.configuration(tmp_path/'root')), default=str))
+    saved.pop('library_sequence'), saved.pop('library_step')
+    saved['skill_library'] = str(lib.SEED)
+    config = Configuration.from_dict(saved)
+    assert (config.library_sequence, config.library_step) == ('unnamed', '1/1')

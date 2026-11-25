@@ -53,6 +53,25 @@ episodes, tokens, wall time). The comparison is the same tasks run without a lib
   publishes (rejected: porting upstream's `skill_library.py` merge flow; reusing
   `--adaptation-source`, which carries one same-task source and cannot accumulate).
 
+## Session kinds (decided 2026-11-25)
+
+- **Single-task research:** a session without the library options. Its instructions are the
+  standard RAX ones (solve by hand first, then automate), unchanged byte for byte.
+- **Library sequence research:** only `scripts/run_skill_library_sequence.py` makes these
+  sessions. It passes `--skill-library`, `--library-sequence` (name) and `--library-step`
+  (`K/N`). `configure_auto_research.py` refuses the library alone, and the configuration
+  requires the three together, never with an adaptation source.
+- In a library sequence, the setting starts with the four seed entries complete, and the
+  agent works code first:
+  - step 0: pick the nearest entries, copy the nearest one's code, run it once, and list
+    which conditions it meets and which phases must change;
+  - step 1: work out by hand only those phases;
+  - step 2: replace what is tied to the earlier task and keep what works.
+  The goal paragraph, "Start here", the kickoff prompt and autonomous-control say the same.
+- Every task is a fresh session: a new agent home and conversation. Only the library carries
+  over, and the instructions say so. The sequence never resumes a session.
+- The dashboard labels each session `single task` or `library sequence <name> · task K/N`.
+
 ## Library layout
 
 ```
@@ -77,7 +96,8 @@ Failure modes.
 
 ## How the agent sees it
 
-- `--skill-library DIR` (configure) stores the path in the session configuration.
+- `--skill-library DIR` with `--library-sequence` and `--library-step` (configure, set by the
+  sequence script only) stores the path and the session's place in the sequence.
 - The exploring agent's workspace gets a copy at `skill-library/` (no `.git`); formal copies do
   not (their carried `code/` already holds whatever was copied in).
 - Skill `skill-library` (`agent_skills/task/skill-library/`, installed only with a library)

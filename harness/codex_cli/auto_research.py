@@ -73,7 +73,8 @@ def populate_workspace(config, workspace, contract=None, *, formal_episode=False
     if library:
         # The controller library the agent starts from; the session records which commit it got.
         from services.skill_library import PROVENANCE, copy_into_workspace
-        persist(config.root/PROVENANCE, copy_into_workspace(config.skill_library, workspace))
+        persist(config.root/PROVENANCE, {**copy_into_workspace(config.skill_library, workspace),
+                                         'sequence': config.library_sequence, 'step': config.library_step})
     rubric = benchmark.task_context(config, demonstration, live_formal=formal_episode)
     text = rubric + task_demonstration_context(demonstration, live_formal=formal_episode, bundles=not config.agent_formal)
     (workspace/'TASK.md').write_text(text)

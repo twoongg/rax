@@ -36,7 +36,9 @@ running; otherwise it is review-only, so resume it from the terminal.
   the form, and fields that do not apply are fixed, with the reason as a tooltip. The
   form remembers the last prepared settings (`runtime/operator/auto-research.json`).
   Preparing a Claude `claude-login` session first checks the experiment token.
-- **Session:** stage, exploration used, manual success, formal success and average
+- **Session:** research kind (`single task`, or `library sequence <name> · task K/N` for
+  sessions made by `scripts/run_skill_library_sequence.py`, also shown in the session list),
+  stage, exploration used, manual success, formal success and average
   score, live-copy results, agent tokens (main agent and subagents), Gemini spend, the
   agent CLI and provider, and subagent counts. Below them:
   - the terminal launch command, to copy;

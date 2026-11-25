@@ -48,7 +48,9 @@ def main():
     parser.add_argument('--formal-episodes', type=int)
     parser.add_argument('--record', type=Path, required=True)
     parser.add_argument('--skill-library', type=Path,
-                        help='Controller library copied into the agent workspace (services/skill_library.py)')
+                        help='Library sequence research only (set by scripts/run_skill_library_sequence.py)')
+    parser.add_argument('--library-sequence', help='Set by scripts/run_skill_library_sequence.py')
+    parser.add_argument('--library-step', help='Set by scripts/run_skill_library_sequence.py')
     args = parser.parse_args()
     if args.backend == 'claude' and args.provider not in ('openrouter', 'custom'):
         parser.error('The native DeepSeek authentication modes require --backend dsh')
@@ -80,8 +82,10 @@ def main():
         configure += ['--formal-episodes', str(args.formal_episodes)]
     if args.image:
         configure += ['--image', args.image]
-    if args.skill_library:
-        configure += ['--skill-library', str(args.skill_library)]
+    for flag, value in (('--skill-library', args.skill_library), ('--library-sequence', args.library_sequence),
+                        ('--library-step', args.library_step)):
+        if value:
+            configure += [flag, str(value)]
     output = subprocess.check_output(configure, cwd=PROJECT, text=True)
     config = Path(output.strip().splitlines()[-1])
     if not config.is_file():

@@ -377,6 +377,12 @@ function renderLibrary(session) {
   }));
 }
 
+// Single-task research, or one step of a library sequence (scripts/run_skill_library_sequence.py).
+function researchLabel(research) {
+  if (research?.mode !== 'library sequence') return 'single task';
+  return `library sequence ${research.sequence ?? '?'} · task ${research.step ?? '?'}`;
+}
+
 function agentLabel(agent) {
   if (!agent) return null;
   const effort = agent.effort ? ` · effort ${agent.effort}` : '';
@@ -389,7 +395,8 @@ function agentLabel(agent) {
 function renderResearch() {
   const session = data.selected;
   selected = session?.run_id || '';
-  syncSelect($('run'), data.sessions.length ? data.sessions.map(row => [row.run_id, `${row.task} · ${row.run_id} · ${row.status}`]) : [['', 'No sessions']], runId());
+  syncSelect($('run'), data.sessions.length ? data.sessions.map(row => [row.run_id, `${row.task} · ${row.run_id} · ${row.status}` +
+    (row.research?.mode === 'library sequence' ? ` · ${researchLabel(row.research)}` : '')]) : [['', 'No sessions']], runId());
   const batch = session?.formal_batch, score = batch?.score_summary, gemini = session?.gemini;
   const agentScore = session?.agent_formal_batch?.score_summary;
   const scoreText = summary => summary.average_score_percent != null ? summary.average_score_percent.toFixed(1)+'%'
@@ -397,7 +404,8 @@ function renderResearch() {
       (summary.recorded_average_score_percent != null ? ` (${summary.recorded_average_score_percent.toFixed(1)}% so far)` : '');
   const scoreLabel = benchmarkInfo(session?.task).score_label || 'Formal average score';
   const rows = [
-    ['Task', session?.task], ['Lifecycle', session?.status], ['Stage', session?.stage],
+    ['Task', session?.task], ['Research', session ? researchLabel(session.research) : null],
+    ['Lifecycle', session?.status], ['Stage', session?.stage],
     ['Manual success', session ? String(session.manual_success) : null],
     ['Exploration used', session ? `${session.exploration_used} / ${session.exploration_limit}` : null],
     ['Formal success', batch ? `${batch.success_count} / ${batch.episode_count} (${percent(batch.success_rate)})` : null],

@@ -99,6 +99,7 @@ def auto_research(target, *, profile='rgbd', envs=1, subagents=0, agent_formal=F
                            agent_provider='claude-login' if claude else 'openrouter',
                            # The seed controller library, as a session prepared with --skill-library gets it.
                            skill_library=str(SEED) if library else None,
+                           library_sequence='golden' if library else None, library_step='1/6' if library else None,
                            **demonstration_context(demonstrations))
     target.mkdir()
     provision = module.provision_demonstration

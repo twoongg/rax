@@ -77,8 +77,10 @@ def arguments():
     parser.add_argument('--adaptation-context', choices=('resume', 'compact', 'clear'), default='compact',
                         help='Adaptation: conversation carried from the source trial')
     parser.add_argument('--skill-library', type=Path,
-                        help='Controller library (services/skill_library.py) copied into the agent workspace as '
-                             'skill-library/; create one with: python -m services.skill_library init DIR')
+                        help='Library sequence research only, set by scripts/run_skill_library_sequence.py: the '
+                             'controller library copied into the agent workspace. Leave it out for single-task research')
+    parser.add_argument('--library-sequence', help='Set by scripts/run_skill_library_sequence.py: the sequence name')
+    parser.add_argument('--library-step', help="Set by scripts/run_skill_library_sequence.py: this task's place, 'K/N'")
     parser.add_argument('--agent-formal', choices=('off', 'on'), default='off',
                         help='Evaluation mode: off = code alone (submit one rehearsed bundle); on = live copies of '
                              'the agent play the held-out layouts (no bundle tools in exploration)')
@@ -114,10 +116,14 @@ def main():
         parser.error(f'--episodes must be 1..{MAX_EXPLORATION_EPISODES}')
     if args.recording_gib < 1:
         parser.error('--recording-gib must be at least 1')
-    apply_benchmark(parser, args)
+    library = (args.skill_library, args.library_sequence, args.library_step)
+    if any(library) and not all(library):
+        parser.error('--skill-library is for library sequence research and is set only by '
+                     'scripts/run_skill_library_sequence.py (with --library-sequence and --library-step); '
+                     'for single-task research, leave it out')
     if args.skill_library is not None and not (args.skill_library/'INDEX.md').is_file():
-        parser.error(f'--skill-library {args.skill_library} has no INDEX.md; create it with '
-                     'python -m services.skill_library init DIR')
+        parser.error(f'--skill-library {args.skill_library} has no INDEX.md')
+    apply_benchmark(parser, args)
     episode_seconds = benchmark_named(args.benchmark).task_timeouts(args.task)['episode_seconds']
     devices = subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader'], text=True)
     mapping = {}
@@ -145,6 +151,7 @@ def main():
         external_perception=args.external_perception == 'on',
         perception_url=args.perception_url, perception_model=args.perception_model,
         skill_library=str(args.skill_library.resolve()) if args.skill_library else None,
+        library_sequence=args.library_sequence, library_step=args.library_step,
         benchmark=args.benchmark)
     validate_layouts(config)
     # Fetch only official visual media before any model/episode starts; the agent works offline. Deployment converts the selected format to local images.
