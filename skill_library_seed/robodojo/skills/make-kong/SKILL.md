@@ -18,24 +18,6 @@ object upright, waiting for something else in the scene to change, or precise pl
 fixed spot. Also for camera geometry without depth: pixel rays, projection and multi-view
 triangulation (`triangulation.py`). The task text is in [TASK.md](TASK.md).
 
-**It needs `robodojo_toolkit.py`.** `controller.py` imports `robodojo_toolkit`, a planner and
-IK module from the authors' setup that was not published. A replacement was written later,
-and make_kong runs with it. Look in this entry's `code/`:
-
-- **`code/robodojo_toolkit.py` is there:** copy it with the rest of `code/`; the controller
-  runs as it is.
-- **It is not there:** the controller stops at the import. Use the entry as a reference and
-  replace the calls:
-
-| Call in controller.py | What it did | Use instead |
-|---|---|---|
-| `tk.parse_reply(reply)` | reply -> (meta, images) | parse the JSON text block and the image blocks yourself |
-| `tk.episode_ended(reply)` | episode over? | `episode_ended` in the reply |
-| `tk.shared_planner()` + `self.planner` | cuRobo plans in process | `robodojo_free_space_move` with `preview_only=True, include_trajectory=True` |
-| `tk.ik(arm, seed, pose)` | IK with `converged` | `robodojo_ik` |
-| `tk.ee_rows(meta, waypoints)` | EEF waypoints -> joint rows | `robodojo_step_eef` |
-| `tk.pose_error(meta, arm, pose)` | reached-pose error | compare `eef_positions` / `eef_quaternions_wxyz` with the target |
-
 ## Procedure
 
 `controller.py:main(ctx)` runs `run_task(Bot(ctx))`:
@@ -54,16 +36,21 @@ and make_kong runs with it. Look in this entry's `code/`:
 
 ## Code
 
-Entry: `code/controller.py`, `main(ctx)`. Modules: `scene.py` (fixed scene facts),
-`vision.py`, `triangulation.py`.
+Entry: `code/controller.py`, `main(ctx)`. Modules: `robodojo_toolkit.py` (reply parsing,
+motion planning, IK), `scene.py` (fixed scene facts), `vision.py`, `triangulation.py`.
 
 | Part | Where | What it does | Reuse notes |
 |---|---|---|---|
+| `parse_reply(reply)`, `episode_ended(reply)` | robodojo_toolkit.py | Reply -> (meta, decoded images); whether the episode is over | General |
+| `shared_planner().plan(arm, state, pose, gripper_opening=...)` | robodojo_toolkit.py | Collision-aware plan (robot and table) from a 14-value joint state to a link6 pose; returns `status` and joint-row `actions` | General |
+| `ik(arm, seed, pose)` | robodojo_toolkit.py | IK from a 6-joint seed to a link6 pose; returns (joints, info with `converged`) | General |
+| `ee_rows(meta, waypoints)` | robodojo_toolkit.py | Link6 waypoints per arm -> 16-column EEF action rows | General |
+| `pose_error(meta, arm, pose)` | robodojo_toolkit.py | Error between the measured link6 pose and a target | General |
 | `transform`, `intrinsics`, `camera_pose`, `pixel_ray`, `ray_plane`, `project`, `triangulate` | triangulation.py | Pinhole models of cam_high and both wrist cameras (wrist pose from the reply's link6 pose); pixel -> ray, ray -> plane point, point -> pixel, least-squares point from 2+ views | General, NumPy only; works without depth |
 | `qmul`, `qaxis`, `qrot` | controller.py | Quaternion product, axis-angle, rotate a vector | General |
-| `Bot.run_joint`, `arm_rows`, `run_parallel`, `hold`, `gripper` | controller.py | Joint-row execution with gripper columns forced to the commanded opening; move both arms at once | General; needs `robodojo_toolkit.py` or the replacements above |
-| `Bot.plan`, `plan_rows`, `plan_joint_goal` | controller.py | Planned moves with fallback targets | Pattern; uses `robodojo_toolkit.py`'s planner |
-| `Bot.ee_line`, `ee_path` | controller.py | Straight Cartesian lines / pose lists for one arm | Pattern; uses `robodojo_toolkit.ee_rows` |
+| `Bot.run_joint`, `arm_rows`, `run_parallel`, `hold`, `gripper` | controller.py | Joint-row execution with gripper columns forced to the commanded opening; move both arms at once | General |
+| `Bot.plan`, `plan_rows`, `plan_joint_goal` | controller.py | Planned moves with fallback targets | Pattern |
+| `Bot.ee_line`, `ee_path` | controller.py | Straight Cartesian lines / pose lists for one arm | Pattern |
 | `densify` | controller.py | Insert rows so no joint jumps more than a limit per row | General |
 | `handover` | controller.py | Two-arm hand-over sequence | General pattern |
 | `rotate_and_place` | controller.py | Rotate a held object about the fingertip, then place upright | General pattern |

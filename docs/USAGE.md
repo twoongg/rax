@@ -340,8 +340,10 @@ reuses or imitates them and adds its own when it is done
   RAX authors' sessions (make_kong, plug_in_charger, pour_by_language, swap_blocks), unchanged,
   each with a card (`SKILL.md`) and its `TASK.md`.
 - `python -m services.skill_library init DIR` creates a library from the seed as a git
-  repository. `make-kong` needs `robodojo_toolkit.py`, which exists only on the server: add it
-  with `python -m services.skill_library add-file DIR make-kong <path>/robodojo_toolkit.py`.
+  repository. `make-kong` needs `robodojo_toolkit.py`, which exists only on the server: commit
+  it into the seed there (`skill_library_seed/robodojo/skills/make-kong/code/`) before `init`,
+  or add it to an existing library with
+  `python -m services.skill_library add-file DIR make-kong <path>/robodojo_toolkit.py`.
   `python -m services.skill_library check DIR` lists entries whose code imports a module they
   do not have. `--skill-library DIR` (prepare) copies it into the exploring agent's workspace
   as `skill-library/` and installs the `skill-library` skill and numbered `AGENTS.md` steps;

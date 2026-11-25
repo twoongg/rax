@@ -125,12 +125,13 @@ Failure modes.
 ## Seed notes
 
 - make_kong imports `robodojo_toolkit` (the authors' planner and IK), which was not published.
-  A replacement `robodojo_toolkit.py` was written on the server, and make_kong's formal batch
-  passes with it there; the file stays on the server. It is added to a server library with
-  `python -m services.skill_library add-file <library> make-kong <path>` (or the sequence
-  script's `--add-file make-kong=<path>`), and `check` / the sequence script warn while an
-  entry imports a module it lacks. The card covers both cases: copy the toolkit when `code/`
-  has it, otherwise replace its calls with the tools it names.
+  A fully compatible `robodojo_toolkit.py` was written on the server, where it is committed into
+  the seed (`skills/make-kong/code/`) of the server checkout; this repository does not have it.
+  The agent-facing card and library README treat it as an ordinary module of the entry, with no
+  text about its absence. Operators get the warning instead: `check`, `init` and the sequence
+  script list entries whose code imports a module they lack, and `add-file` (or the sequence
+  script's `--add-file`) adds a file to a library that was created without it. The workspace
+  goldens do not hash entries' `code/`, so a server seed with the extra module renders the same.
 - The Opus sessions' own `TASK.md` files were not published; the seed's are regenerated with
   `--task-rules public`, without demonstration images.
 - The Opus controllers' formal scores were not published; their cards say "not published".

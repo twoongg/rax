@@ -219,6 +219,10 @@ def index(tree):
         relative = path.relative_to(tree).as_posix()
         if '__pycache__' in path.parts:
             continue
+        if relative.startswith('skill-library/skills/') and '/code/' in relative:
+            # A library entry's code is data copied whole; a server's seed may add modules
+            # (make-kong's robodojo_toolkit.py). Cards, TASK.md and the index stay covered.
+            continue
         if path.is_symlink():
             target = os.readlink(path)
             entries[relative] = 'link:' + target

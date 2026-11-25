@@ -289,8 +289,12 @@ def test_the_dashboard_shows_what_a_library_session_was_given_and_what_piled_up(
 
 
 def test_a_server_only_module_is_flagged_until_added_to_its_entry(tmp_path):
+    # The repository's seed lacks robodojo_toolkit.py; a server's seed may hold it.
+    seed = tmp_path/'seed'
+    shutil.copytree(lib.SEED, seed)
+    (seed/'skills/make-kong/code/robodojo_toolkit.py').unlink(missing_ok=True)
     library = tmp_path/'library'
-    seeded = lib.init(library)
+    seeded = lib.init(library, seed)
     assert lib.missing_modules(library) == {'make-kong': ['robodojo_toolkit']}
     assert 'add-file' in lib.missing_report(library)[0]
     toolkit = tmp_path/'server'/'robodojo_toolkit.py'

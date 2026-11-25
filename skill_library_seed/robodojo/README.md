@@ -27,15 +27,3 @@ sessions, published in the dataset `robot-agent-exploration/robot-session-logs`
 CC-BY-4.0; paper: arXiv 2610.22496). Their code is unchanged. Their cards and `TASK.md` files
 were written here: the `TASK.md` files are regenerated with the public rubric (the sessions'
 own were not published), and their formal scores were not published.
-
-`make-kong` imports `robodojo_toolkit`, a module from the authors' setup that was not
-released. A replacement `robodojo_toolkit.py` was written on the server, and make_kong's
-formal batch runs with it there. That file is not in this repository; add it to a library
-created from this seed:
-
-```bash
-python -m services.skill_library add-file <library> make-kong <path>/robodojo_toolkit.py
-python -m services.skill_library check <library>   # lists entries that still lack a module
-```
-
-Without it, the card lists the tools to use in place of each call.
