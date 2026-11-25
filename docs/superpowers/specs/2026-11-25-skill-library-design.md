@@ -47,7 +47,7 @@ episodes, tokens, wall time). The comparison is the same tasks run without a lib
 - The loop is strictly sequential; an entry is added after its formal batch, regardless of the
   score. A minimum-success filter stays open as a later option (implemented as an opt-in flag,
   off by default).
-- Task order, nearest tasks first: pour_liquid_into_cup, press_by_number, swap_t,
+- Task order, nearest tasks first: pour_liquid_into_cup, press_by_number, swap_T,
   pour_balls_into_vase, insert_tubes, insert_key.
 - Build approach 1: a small harness option plus an outside script that runs the loop and
   publishes (rejected: porting upstream's `skill_library.py` merge flow; reusing

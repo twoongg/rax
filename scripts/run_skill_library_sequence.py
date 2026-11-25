@@ -11,7 +11,7 @@ Design: docs/superpowers/specs/2026-11-25-skill-library-design.md.
 
     runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \\
         --library runtime/skill-library/deepseek-a \\
-        --tasks pour_liquid_into_cup,press_by_number,swap_t,pour_balls_into_vase,insert_tubes,insert_key \\
+        --tasks pour_liquid_into_cup,press_by_number,swap_T,pour_balls_into_vase,insert_tubes,insert_key \\
         --configure-args "--sim-gpu 0 --agent-cli claude --agent-provider custom --episodes 16 --formal-episodes 10" \\
         --launch-args "--claude-base-url http://127.0.0.1:8000 --claude-key-file <key file> --claude-model <model>"
 
@@ -98,6 +98,26 @@ def sequence(tasks, *, library, records, prepare, launch, publish=True, min_succ
             log(f'[{task}] stopping the sequence: {row["reason"]}; rerun to retry from this task')
             break
     return rows
+
+
+def unknown_tasks(tasks, known):
+    """Problems with task names before anything runs; names are case-sensitive (swap_T, push_T)."""
+    if not known:
+        return []  # No task list here (no RoboDojo checkout): configure checks each task later.
+    problems = []
+    for task in tasks:
+        if task not in known:
+            near = sorted(k for k in known if k.lower() == task.lower())
+            problems.append(f'{task}: not a task' + (f'; did you mean {near[0]}?' if near else ''))
+    return problems
+
+
+def known_tasks():
+    try:
+        from services.benchmarks import BENCHMARKS, DEFAULT
+        return set(BENCHMARKS[DEFAULT].task_names())
+    except Exception:
+        return set()
 
 
 def add_files(library, specs):
@@ -190,6 +210,9 @@ def main(argv=None):
         parser.error('--library is required (or --no-library)')
     if args.min_success is not None and not 0 <= args.min_success <= 1:
         parser.error('--min-success must be between 0 and 1')
+    problems = unknown_tasks(tasks, known_tasks())
+    if problems:
+        parser.error('; '.join(problems))
     args.library = args.library.resolve() if args.library else None
     args.sequence_name = args.sequence_name or (args.library.name if args.library else args.records.stem)
     args.records = (args.records or Path(f'{args.library}-runs.jsonl')).resolve()

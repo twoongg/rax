@@ -360,3 +360,13 @@ def test_a_library_session_saved_before_sequences_still_loads(tmp_path):
     saved['skill_library'] = str(lib.SEED)
     config = Configuration.from_dict(saved)
     assert (config.library_sequence, config.library_step) == ('unnamed', '1/1')
+
+
+def test_the_sequence_checks_task_names_before_running():
+    sys.path.insert(0, str(PROJECT/'scripts'))
+    import run_skill_library_sequence as runner
+    known = {'swap_T', 'push_T', 'pour_liquid_into_cup'}
+    assert runner.unknown_tasks(['pour_liquid_into_cup', 'swap_T'], known) == []
+    assert runner.unknown_tasks(['swap_t', 'no_task'], known) == [
+        'swap_t: not a task; did you mean swap_T?', 'no_task: not a task']
+    assert runner.unknown_tasks(['swap_t'], set()) == []  # No task list here: configure checks later.

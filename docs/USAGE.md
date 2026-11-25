@@ -377,7 +377,7 @@ batch, so each task starts from what the earlier ones added:
 runtime/envs/robodojo/bin/python scripts/run_skill_library_sequence.py \
     --library runtime/skill-library/deepseek-a \
     --add-file make-kong=<path>/robodojo_toolkit.py \
-    --tasks pour_liquid_into_cup,press_by_number,swap_t,pour_balls_into_vase,insert_tubes,insert_key \
+    --tasks pour_liquid_into_cup,press_by_number,swap_T,pour_balls_into_vase,insert_tubes,insert_key \
     --configure-args "--sim-gpu 0 --agent-cli claude --agent-provider custom --formal-episodes 10" \
     --launch-args "--claude-base-url http://127.0.0.1:8000 --claude-key-file <key file> --claude-model <model>"
 ```
